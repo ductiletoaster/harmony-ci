@@ -1,0 +1,11 @@
+---
+name: gitleaks (secret scan)
+description: >
+  Secret scan across the full working tree using the baked gitleaks. BLOCKING.
+  The caller must have checked out the repo with fetch-depth: 0 so history is
+  scanned, not just the tip. Requires a harmony-arc-runner (gitleaks on PATH).
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: gitleaks detect --source . --redact --verbose --no-banner

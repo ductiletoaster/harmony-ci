@@ -1,0 +1,16 @@
+---
+name: tflint (terraform lint)
+description: >
+  Terraform lint via the baked tflint (bundled rules only — no --init/plugins, so
+  egress-free). Reads the caller's .tflint.hcl if present. Skips cleanly when the
+  caller has no *.tf. BLOCKING. Requires a harmony-arc-runner (tflint on PATH).
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        if ! find . -path ./.git -prune -o -name '*.tf' -print | grep -q .; then
+          echo "No *.tf — tflint skipped." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        tflint --recursive --format compact

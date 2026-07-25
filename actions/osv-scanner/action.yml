@@ -1,0 +1,16 @@
+---
+name: osv-scanner (dependency CVEs)
+description: >
+  Dependency-CVE scan via the baked osv-scanner against the OFFLINE baked DB
+  (egress-free; no osv.dev calls). Reads the CALLER's lockfiles natively
+  (uv.lock, requirements.txt, package-lock.json, …). Grandfather accepted residue
+  with a repo-root osv-scanner.toml so it blocks only NEW CVEs. BLOCKING. Seeded
+  ecosystems: PyPI/npm/Go/Cargo — an unseeded ecosystem needs a Dockerfile
+  seed-tree entry. Requires a harmony-arc-runner (osv-scanner + /opt/osv-scanner-db).
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY: /opt/osv-scanner-db
+      run: osv-scanner scan --offline --recursive .

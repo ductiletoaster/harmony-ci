@@ -1,0 +1,12 @@
+---
+name: semgrep (SAST)
+description: >
+  SAST via the baked, tokenless ruleset at /opt/semgrep/harmony-baseline.yaml
+  (registry configs are login-gated → zero findings, so we vendor+bake the
+  ruleset). --error makes any finding a non-zero exit. BLOCKING. Requires a
+  harmony-arc-runner (semgrep + the baked ruleset on the image).
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: semgrep scan --config /opt/semgrep/harmony-baseline.yaml --error --metrics=off

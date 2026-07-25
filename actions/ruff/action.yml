@@ -1,0 +1,25 @@
+---
+name: ruff (python lint + format)
+description: >
+  Python lint + format check via the baked ruff, reading the CALLER repo's
+  [tool.ruff] config. Auto-detected: skips cleanly (not silent-green) when the
+  repo has no pyproject.toml / requirements*.txt, so it's safe in a non-Python
+  job. BLOCKING. Requires a harmony-arc-runner (ruff on PATH).
+runs:
+  using: composite
+  steps:
+    - id: detect
+      shell: bash
+      run: |
+        if [ -f pyproject.toml ] || ls -1 requirements*.txt >/dev/null 2>&1; then
+          echo "python=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "python=false" >> "$GITHUB_OUTPUT"
+          echo "No pyproject.toml / requirements*.txt — ruff skipped." >> "$GITHUB_STEP_SUMMARY"
+        fi
+    - if: steps.detect.outputs.python == 'true'
+      shell: bash
+      run: ruff check .
+    - if: steps.detect.outputs.python == 'true'
+      shell: bash
+      run: ruff format --check .

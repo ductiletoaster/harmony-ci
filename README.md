@@ -30,6 +30,29 @@ regressions):
 graph, so it belongs in each consumer's own env-aware CI (e.g. `uv run mypy` /
 `uv run basedpyright`, `tsc --noEmit`).
 
+## Two ways to consume
+
+Each gate is both a **composite action** (`actions/<gate>/`) and a step in the
+batteries-included **reusable workflow** (`.github/workflows/gates.yml`):
+
+- **Standard floor** — call the workflow (below): one line, all gates, stable
+  check names (`gates / <gate>`) ideal for branch-protection required checks.
+- **A single gate in your own job** — use the action directly, so you control the
+  runner, ordering, and can interleave with your own steps:
+
+  ```yaml
+  jobs:
+    build:
+      runs-on: fire-risk-ci
+      steps:
+        - uses: actions/checkout@<sha>
+        - uses: ductiletoaster/harmony-ci/actions/semgrep@<sha>   # just SAST, here
+        - run: ./build.sh
+  ```
+
+Actions assume the repo is already checked out (they don't checkout). `gitleaks`
+wants `fetch-depth: 0`. All actions require a `harmony-arc-runner` (baked tools).
+
 ## Requirements
 
 Runners built from **`harmony-arc-runner`** (baked tools + rulesets + offline OSV
