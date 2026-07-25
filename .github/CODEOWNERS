@@ -1,0 +1,3 @@
+# This repo is a supply-chain root — its workflows run in every consumer's CI.
+# Every change requires review by the owner (enforced via branch protection).
+* @ductiletoaster

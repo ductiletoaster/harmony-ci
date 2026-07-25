@@ -1,0 +1,14 @@
+---
+extends: default
+
+rules:
+  # GitHub Actions workflows use the `on:` key, which yamllint's truthy rule
+  # otherwise flags. Don't check keys for truthiness (values still checked).
+  truthy:
+    check-keys: false
+  line-length:
+    max: 160
+  comments:
+    min-spaces-from-content: 1
+  # Intentional comment placement (aligned to the block a note refers to).
+  comments-indentation: disable

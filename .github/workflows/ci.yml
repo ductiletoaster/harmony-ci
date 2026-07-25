@@ -1,0 +1,26 @@
+---
+# This public repo's OWN CI — it's a supply-chain root, so it lints itself.
+# Runs on GitHub-hosted runners (no baked tools needed to lint YAML/workflows),
+# unlike the gate library it ships, which runs on consumers' ARC runners.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: yamllint
+        run: pipx run yamllint --strict .github/workflows
+      - name: actionlint
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
