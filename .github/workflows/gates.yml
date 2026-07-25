@@ -7,28 +7,28 @@
 # possible, so the orchestration lives here in the open. Nothing sensitive is
 # here: the actual gate TOOLS + the Semgrep ruleset stay BAKED into the PRIVATE
 # `harmony-arc-runner` image (the real trust root). This file only invokes tools
-# already on the runner's PATH.
+# already on the runner's PATH — via the composite actions in `actions/<gate>/`.
 #
-# SUPPLY-CHAIN NOTE: a change here runs in every consumer's CI (ARC runners that
-# hold write-capable tokens). Consume it PINNED TO A COMMIT SHA, never `@main`:
+# COMPOSITION: each job runs the matching composite action, pinned by COMMIT SHA
+# (a reusable workflow can't reference a same-repo action with `./` — GitHub
+# resolves that against the CALLER's checkout — so we use the full path @ SHA;
+# there's no self-at-SHA syntax yet). Renovate-on-this-repo bumps these internal
+# SHAs through a reviewed PR. The action SHA is an ancestor commit on this repo's
+# main, so it's immutable — a consumer that pins this workflow by SHA gets a fully
+# frozen pipeline (workflow + the exact actions it runs).
+#
+# SUPPLY-CHAIN NOTE: consume THIS workflow PINNED TO A COMMIT SHA, never `@main`:
 #   uses: ductiletoaster/harmony-ci/.github/workflows/gates.yml@<40-char-sha>
-# Renovate bumps the SHA through a reviewed PR. Changes here require PR + review
-# (CODEOWNERS) + this repo's own CI; version tags are protected/immutable.
+# Changes here require PR + review (CODEOWNERS) + this repo's own CI.
 #
-# REQUIRES: runners built from `harmony-arc-runner` (baked gitleaks, semgrep +
-# /opt/semgrep/harmony-baseline.yaml, ruff, osv-scanner + /opt/osv-scanner-db,
-# tflint, hadolint). Pass your runner label via the `runner` input.
+# REQUIRES: runners built from `harmony-arc-runner` (baked tools + rulesets +
+# offline OSV DB). Pass your runner label via the `runner` input.
 #
-# METHODOLOGY (green-first): a gate ships here only once its tool passes clean on
-# a healthy repo — fix/tune/baseline FIRST, then enforce. Every gate is BLOCKING;
-# it fails only on NEW regressions. No "warn-only forever".
-#
-# Gates: gitleaks (secrets) · semgrep (SAST, baked ruleset) · ruff (py lint+fmt,
-# auto-detected) · osv-scanner (dep CVEs, offline baked DB) · tflint (TF lint) ·
-# hadolint (Dockerfile lint). Consumer owns each tool's config (its own
-# pyproject/.tflint.hcl/.hadolint.yaml); the Semgrep ruleset is the one shared,
-# baked config. Type-checking is deliberately NOT here — it needs the resolved
-# dependency graph, so it belongs in the consumer's own env-aware CI.
+# Gates: gitleaks · semgrep · ruff · osv-scanner · tflint · hadolint — all
+# BLOCKING (fail only on NEW regressions on a greened repo). Consumer owns each
+# tool's config; the Semgrep ruleset is the one shared, baked config. Type-checking
+# is deliberately NOT here — it needs the resolved dependency graph, so it belongs
+# in the consumer's own env-aware CI.
 name: Gates
 
 on:
@@ -54,97 +54,40 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 0
-      # Baked gitleaks. Scans the full working tree (not just a diff) so a secret
-      # committed anywhere on the branch is caught. --redact keeps matches out of
-      # the logs. BLOCKING.
-      - name: Scan for secrets
-        run: gitleaks detect --source . --redact --verbose --no-banner
+          fetch-depth: 0  # full history so a secret committed anywhere is caught
+      - uses: ductiletoaster/harmony-ci/actions/gitleaks@79d44e78b10d97dc2f2337d867f2194932094a3e
 
   semgrep:
     name: semgrep (SAST)
     runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      # Baked ruleset at /opt/semgrep/harmony-baseline.yaml — the tokenless SSOT
-      # (registry configs are login-gated → zero findings). --error makes any
-      # finding a non-zero exit. BLOCKING.
-      - name: Semgrep scan (baked baseline ruleset)
-        run: semgrep scan --config /opt/semgrep/harmony-baseline.yaml --error --metrics=off
+      - uses: ductiletoaster/harmony-ci/actions/semgrep@79d44e78b10d97dc2f2337d867f2194932094a3e
 
   ruff:
     name: ruff (python lint + format)
     runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      # Python pack — auto-detected. A repo with no pyproject.toml/requirements
-      # skips ruff cleanly, so this reusable workflow is safe for non-Python
-      # callers (the skip is recorded in the run summary, not silent-green).
-      - name: Detect Python project
-        id: detect
-        run: |
-          if [ -f pyproject.toml ] || ls -1 requirements*.txt >/dev/null 2>&1; then
-            echo "python=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "python=false" >> "$GITHUB_OUTPUT"
-            echo "No pyproject.toml / requirements*.txt — ruff skipped." >> "$GITHUB_STEP_SUMMARY"
-          fi
-      # Baked ruff reads the CALLER repo's [tool.ruff] config (consumer owns
-      # config). BLOCKING — blocks only NEW regressions on a greened repo.
-      - name: Ruff lint
-        if: steps.detect.outputs.python == 'true'
-        run: ruff check .
-      - name: Ruff format check
-        if: steps.detect.outputs.python == 'true'
-        run: ruff format --check .
+      - uses: ductiletoaster/harmony-ci/actions/ruff@79d44e78b10d97dc2f2337d867f2194932094a3e
 
   osv-scanner:
     name: osv-scanner (dependency CVEs)
     runs-on: ${{ inputs.runner }}
-    # Offline vuln DB baked into the runner image (populated at image build via
-    # --download-offline-databases). Seeded ecosystems: PyPI/npm/Go/Cargo — a
-    # caller on an unseeded ecosystem (Ruby/Maven/…) must add its manifest to
-    # the Dockerfile seed tree, else --offline errors on it.
-    env:
-      OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY: /opt/osv-scanner-db
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      # --offline = egress-free (reads only the baked DB; no osv.dev calls).
-      # Reads the CALLER repo's lockfiles natively (uv.lock, requirements.txt,
-      # package-lock.json, …). BLOCKING. Grandfather accepted residue via a
-      # repo-root osv-scanner.toml so this blocks only NEW CVEs.
-      - name: Scan dependencies (offline, baked DB)
-        run: osv-scanner scan --offline --recursive .
+      - uses: ductiletoaster/harmony-ci/actions/osv-scanner@79d44e78b10d97dc2f2337d867f2194932094a3e
 
   tflint:
     name: tflint (terraform lint)
     runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      # IaC pack — auto-detected. Baked tflint, bundled rules only (no --init /
-      # plugins → egress-free). Reads the caller's .tflint.hcl if present.
-      # BLOCKING; skips cleanly when the caller has no *.tf.
-      - name: tflint (recursive)
-        run: |
-          if ! find . -path ./.git -prune -o -name '*.tf' -print | grep -q .; then
-            echo "No *.tf — tflint skipped." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          tflint --recursive --format compact
+      - uses: ductiletoaster/harmony-ci/actions/tflint@79d44e78b10d97dc2f2337d867f2194932094a3e
 
   hadolint:
     name: hadolint (dockerfile lint)
     runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      # Baked hadolint reads the caller's .hadolint.yaml (curated ignore list)
-      # from cwd. BLOCKING; skips cleanly when the caller has no Dockerfiles.
-      - name: hadolint
-        run: |
-          shopt -s globstar nullglob
-          files=(**/Dockerfile **/Dockerfile.* **/*.dockerfile)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No Dockerfiles — hadolint skipped." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          hadolint "${files[@]}"
+      - uses: ductiletoaster/harmony-ci/actions/hadolint@79d44e78b10d97dc2f2337d867f2194932094a3e
