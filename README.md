@@ -11,6 +11,27 @@ Repos under different GitHub owners can use these (GitHub can't share a *private
 reusable workflow across owners, and composable public actions are the clearer
 mechanism anyway).
 
+## Opinionated standard
+
+On top of the raw actions there's a **recommended baseline** — a written policy
+and copy-and-tune workflows every consumer should start from:
+
+- **[STANDARD.md](STANDARD.md)** — the opinion: the code-quality / security-floor
+  / security-depth taxonomy, what's mandatory vs. optional, the adoption
+  checklist, runner guidance, branch-protection required checks, and prek
+  coexistence.
+- **[templates/](templates/)** — ready-to-copy workflows:
+  - `ci-arc.yml` — inline CI on a harmony-arc-runner (baked, tokenless floor).
+  - `ci-github-hosted.yml` — the same floor on `ubuntu-latest`, no baked image
+    (for repos without ARC access).
+  - `security-scan.yml` — the weekly, non-blocking security-depth sweep that
+    files a tracking issue on findings.
+
+Adopt the template that matches your runner, tune the language toggles, and mark
+the required checks. **The composite actions below remain for bespoke pipelines**
+that don't fit the templates — the standard is the recommended baseline, not a
+straitjacket.
+
 ## What's here (and what isn't)
 
 - **Here (public):** thin composite actions that *invoke* the gates. Nothing else.

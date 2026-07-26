@@ -1,0 +1,196 @@
+---
+# ci-github-hosted.yml — the SAME security floor on ubuntu-latest, NO baked
+# image (COPY-AND-TUNE TEMPLATE).
+#
+# For repos WITHOUT ARC access. Instead of the baked harmony-arc-runner, tools
+# come from public marketplace actions / on-the-fly installs. This is the floor
+# for the github-hosted consumer repos that have zero security today. See
+# STANDARD.md.
+#
+# ARC vs github-hosted parity (see the SAST caveat below):
+#   gitleaks           ✅ full parity (gitleaks/gitleaks-action)
+#   osv-scanner        ✅ full parity, ONLINE DB (google/osv-scanner-action)
+#   dependency-review  ✅ full parity (actions/dependency-review-action)
+#   semgrep            ⚠️  NEEDS a token OR a vendored ruleset — see below.
+#
+# TO ADOPT:
+#   1. Copy this file to YOUR repo as .github/workflows/ci.yml
+#   2. Uncomment the code-quality block(s) for YOUR stack (all public tools).
+#   3. Add templates/security-scan.yml for the scheduled DEPTH sweep.
+#   4. Mark the required checks in branch protection (see STANDARD.md).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ── SECURITY FLOOR (always inline, blocking on NEW regressions) ────────────
+  # Sourced from public actions — no baked runner needed. The WORKING floor on
+  # github-hosted is gitleaks + osv-scanner + dependency-review (semgrep needs
+  # extra setup — see its job).
+
+  gitleaks:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    steps:
+      # gitleaks scans the full history, so fetch-depth: 0 is REQUIRED.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE is only required for GitHub *Organizations*. Set it
+          # as a repo/org secret if this repo lives under an org account. It is
+          # NOT needed for personal-account repos.
+
+  osv-scanner:
+    name: osv-scanner (dependency CVEs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # ONLINE osv.dev DB (github-hosted has egress) — no baked offline DB.
+      # Reads the repo's lockfiles natively (uv.lock, requirements.txt,
+      # package-lock.json, …). Scans recursively; a non-zero exit blocks the job.
+      # To grandfather accepted residue, add a repo-root osv-scanner.toml.
+      # (If you want SARIF in the Security tab, switch to the reusable workflow at
+      # google/osv-scanner-action/.github/workflows/osv-scanner-*.yml and grant
+      # security-events: write.)
+      - uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        with:
+          scan-args: |-
+            --recursive
+            ./
+
+  dependency-review:
+    name: dependency-review (PR only)
+    # PR-only: inspects the PR's dependency delta; no meaning on a push to main.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
+        with:
+          fail-on-severity: high
+
+  # ── SAST CAVEAT (semgrep on github-hosted) ────────────────────────────────
+  # On ARC, semgrep uses the baked, tokenless harmony-baseline ruleset. That
+  # ruleset is PRIVATE (baked into the runner image), and Semgrep's registry
+  # rulesets (p/*, `auto`) are LOGIN-GATED → zero findings tokenless. So on
+  # github-hosted, semgrep needs ONE of:
+  #   (A) a SEMGREP_APP_TOKEN secret (Semgrep Cloud / registry rules), OR
+  #   (B) a VENDORED ruleset committed to your repo (e.g. .semgrep/rules.yml).
+  # The floor above (gitleaks + osv + dependency-review) works WITHOUT either.
+  # Uncomment ONE variant once you've chosen an approach.
+  #
+  # semgrep:
+  #   name: semgrep (SAST)
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+  #     - uses: astral-sh/setup-uv@v6
+  #     # Variant A — registry rules via a token (requires SEMGREP_APP_TOKEN secret):
+  #     # - run: uvx semgrep ci
+  #     #   env:
+  #     #     SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+  #     # Variant B — a ruleset you vendor into the repo (no token, no login):
+  #     - run: uvx semgrep scan --config .semgrep/rules.yml --error --metrics=off
+
+  # ── CODE QUALITY (always inline, blocking) ────────────────────────────────
+  # UNCOMMENT the block(s) for YOUR stack. lint+format → typecheck → tests.
+  # All public tools, so these behave identically to the arc template. Auto-
+  # detect via `if: hashFiles(...)` where it keeps the block safe on a mixed repo.
+
+  # python:
+  #   name: python · ruff · mypy · pytest
+  #   runs-on: ubuntu-latest
+  #   if: hashFiles('pyproject.toml', 'requirements*.txt') != ''
+  #   steps:
+  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+  #     - uses: astral-sh/setup-uv@v6
+  #     - name: Install dependencies
+  #       run: uv sync
+  #     - name: Ruff lint
+  #       run: uv run ruff check .
+  #     - name: Ruff format check
+  #       run: uv run ruff format --check .
+  #     - name: Typecheck
+  #       run: uv run mypy .
+  #     - name: Pytest
+  #       run: uv run pytest
+
+  # node:
+  #   name: node · biome · tsc · test
+  #   runs-on: ubuntu-latest
+  #   if: hashFiles('package.json') != ''
+  #   steps:
+  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 22
+  #     - name: Install dependencies
+  #       run: npm ci
+  #     - name: Biome check (lint + format)
+  #       run: npx @biomejs/biome check .
+  #     - name: Typecheck
+  #       run: npx tsc --noEmit
+  #     - name: Test
+  #       run: npm test
+
+  # iac:
+  #   name: iac · terraform fmt · validate · tflint
+  #   runs-on: ubuntu-latest
+  #   if: hashFiles('**/*.tf') != ''
+  #   steps:
+  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+  #     - uses: hashicorp/setup-terraform@v3
+  #     - name: Terraform fmt check
+  #       run: terraform fmt -check -recursive
+  #     - name: Terraform validate
+  #       run: terraform validate
+  #     - uses: terraform-linters/setup-tflint@v4
+  #     - name: tflint
+  #       run: tflint --recursive --format compact
+
+  # docker:
+  #   name: docker · hadolint
+  #   runs-on: ubuntu-latest
+  #   if: hashFiles('**/Dockerfile', '**/Dockerfile.*', '**/*.dockerfile') != ''
+  #   steps:
+  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+  #     - uses: hadolint/hadolint-action@v3.1.0
+  #       with:
+  #         recursive: true
+
+  # ── BRANCH-PROTECTION AGGREGATOR ──────────────────────────────────────────
+  # https://github.com/marketplace/actions/alls-green#why
+  # A single, stable required-check for branch protection. Add every code-quality
+  # job you uncommented (and semgrep, if enabled) to `needs`.
+  ci-alls-green:
+    name: CI all green
+    if: always()
+    needs:
+      - gitleaks
+      - osv-scanner
+      - dependency-review
+      # - semgrep
+      # - python
+      # - node
+      # - iac
+      # - docker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide whether the needed jobs succeeded or failed
+        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
+          # dependency-review is skipped on push (PR-only); allow that.
+          allowed-skips: dependency-review
