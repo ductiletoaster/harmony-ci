@@ -1,0 +1,34 @@
+---
+# harmony-ci dogfoods its own github-hosted security floor. This is a
+# CI-capability LIBRARY — no application code, no dependency manifests — so the
+# only floor tool that applies is the secret scan (gitleaks). osv-scanner and
+# semgrep are N/A here (nothing to scan for CVEs, no source to SAST); the full
+# floor lives in templates/ci-github-hosted.yml for consumers that have deps/code.
+#
+# Additive: this does NOT touch ci.yml (the yamllint + actionlint self-lint).
+# Both `uses:` are SHA-pinned, matching templates/ci-github-hosted.yml.
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    steps:
+      # gitleaks scans the full history, so fetch-depth: 0 is REQUIRED.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE is only required for GitHub *Organizations*. This
+          # repo lives under a personal account (ductiletoaster), so no license
+          # is needed.
