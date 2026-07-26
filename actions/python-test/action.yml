@@ -25,4 +25,8 @@ runs:
         fi
     - if: steps.detect.outputs.python == 'true'
       shell: bash
-      run: uv run pytest ${{ inputs.args }}
+      # args passed via env (not interpolated into the script text); unquoted
+      # expansion is intentional so multiple flags word-split into pytest.
+      env:
+        PYTEST_ARGS: ${{ inputs.args }}
+      run: uv run pytest $PYTEST_ARGS
