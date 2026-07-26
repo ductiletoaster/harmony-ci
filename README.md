@@ -64,7 +64,10 @@ tests — can't run as baked scanners, so these run **your own pinned tools** vi
 design: adopt each independently — drop the type-check, or swap its checker,
 without touching lint or test. Auto-detected (skip cleanly with no
 `pyproject.toml`). Require **uv on PATH** — baked into `harmony-arc-runner`; on
-github-hosted, run `astral-sh/setup-uv` first.
+github-hosted, run `astral-sh/setup-uv` first. They run the tools from your
+**default** dependency group (`[dependency-groups] dev`), which `uv run` installs
+via its implicit sync; a repo that isolates them in a non-default group must
+promote it (`[tool.uv] default-groups`) or `uv run` won't find them.
 
 | Action | What | Runs |
 |--------|------|------|
