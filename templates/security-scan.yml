@@ -1,0 +1,144 @@
+---
+# security-scan.yml — scheduled weekly security sweep (COPY-AND-ADAPT STARTING
+# POINT).
+#
+# The "depth" idea from GUIDANCE.md: full/ONLINE scans that are a poor fit for a
+# per-PR gate. It runs on a schedule, never on a pull_request, so it can't block
+# a merge — a scan that finds something goes red and the final `report` job
+# (if: always()) opens or comments on ONE tracking issue. A convenient companion
+# to the inline ci-<arc|github-hosted>.yml floor. Optional — use it if it helps.
+#
+# Why scheduled, not inline:
+#   - ONLINE OSV re-scans UNCHANGED deps against the freshest CVE feed — a CVE
+#     disclosed today should surface even if nobody touched the lockfile.
+#   - Full/online scans are slower and noisier, so gating every PR on them adds
+#     friction for little benefit; a scheduled to-do is a gentler fit.
+#
+# TO USE (adapt freely):
+#   1. Copy this file to YOUR repo as .github/workflows/security-scan.yml
+#   2. Set <YOUR-LABEL> (defaults to ubuntu-latest — these are ONLINE scans and
+#      do NOT need the baked arc image).
+#   3. Enable/disable the OPTIONAL jobs (Trivy, full semgrep) per repo.
+#   4. No need to make this a required check — it's non-blocking by design.
+name: Security Scan (scheduled)
+
+on:
+  schedule:
+    # Weekly, Monday 07:00 UTC. Adjust to taste.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ── ONLINE OSV (freshest CVEs on unchanged deps) — recommended ────────────
+  osv-online:
+    name: osv (online, full CVE feed)
+    runs-on: ubuntu-latest  # <YOUR-LABEL> — online scan, baked image not needed
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: OSV scan (online DB)
+        # A finding turns this job red; the `report` job (if: always()) sees the
+        # red result and files the issue. This never runs on a PR, so a red scan
+        # can't block a merge — it's a scheduled to-do, not a gate.
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        with:
+          scan-args: |-
+            --recursive
+            ./
+
+  # ── Full-history secret scan (gitleaks over ALL commits) — recommended ────
+  secrets-full:
+    name: secrets (full history)
+    runs-on: ubuntu-latest  # <YOUR-LABEL>
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0  # full history
+      - name: Gitleaks (full history)
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Trivy fs scan (OPTIONAL — enable where you ship Dockerfiles) ───────────
+  trivy:
+    name: trivy (fs)
+    runs-on: ubuntu-latest  # <YOUR-LABEL>
+    # OPTIONAL: keep only if this repo builds container images or you want a
+    # filesystem CVE/misconfig sweep. Remove the job (and its `needs` entry in
+    # `report`) otherwise.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+      # To also scan a BUILT image, add a step with scan-type: image and
+      # image-ref: <your-registry>/<image>:<tag>.
+
+  # ── Full semgrep (broader ruleset) — OPTIONAL, token caveat applies ───────
+  semgrep-full:
+    name: semgrep (full ruleset)
+    runs-on: ubuntu-latest  # <YOUR-LABEL>
+    # OPTIONAL. Same caveat as ci-github-hosted.yml: the broad registry rulesets
+    # (p/*, auto) are login-gated, so this needs a SEMGREP_APP_TOKEN secret OR a
+    # vendored ruleset. Remove the job (and its `needs` entry in `report`) if you
+    # have neither.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Semgrep (broad scan)
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        # With a token, `semgrep ci` pulls your configured registry rulesets.
+        # Without one, replace with: uvx semgrep scan --config .semgrep/rules.yml
+        run: uvx semgrep ci
+
+  # ── REPORT: open/update ONE tracking issue if any scan found something ─────
+  # `if: always()` so it runs even when a scan job went red. It reads the needed
+  # jobs' results and files/updates one issue when any is 'failure'. A stable
+  # issue title keeps the sweep from opening a fresh issue every week.
+  report:
+    name: report findings
+    if: always()
+    needs:
+      - osv-online
+      - secrets-full
+      - trivy         # remove if you dropped the trivy job
+      - semgrep-full  # remove if you dropped the semgrep job
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write  # so a finding can open/update a tracking issue
+    steps:
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          failed="$(echo "${RESULTS}" | jq -r \
+            'to_entries | map(select(.value.result == "failure") | .key) | join(", ")')"
+          if [ -z "${failed}" ]; then
+            echo "No scan reported a finding — nothing to file."
+            exit 0
+          fi
+          title="[security-scan] weekly findings"
+          link="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          note="Weekly sweep flagged: **${failed}** — see the [run log](${link}) ($(date -u +%Y-%m-%d))."
+          num="$(gh issue list --state open --search "in:title ${title}" \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "${num}" ]; then
+            gh issue comment "${num}" --body "${note}"
+          else
+            # Requires a `security` label to exist in the repo (create it once:
+            # `gh label create security`). Drop --label if you don't want one.
+            printf 'Automated weekly security sweep.\n\n%s\n' "${note}" \
+              | gh issue create --title "${title}" --label security --body-file -
+          fi

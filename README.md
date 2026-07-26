@@ -11,6 +11,27 @@ Repos under different GitHub owners can use these (GitHub can't share a *private
 reusable workflow across owners, and composable public actions are the clearer
 mechanism anyway).
 
+## Guidance & convenient templates
+
+On top of the raw actions there's **guidance** (recommended patterns + the
+reasoning) and **copy-and-adapt workflows** to make reuse easy. All optional —
+take what fits, delete the rest:
+
+- **[GUIDANCE.md](GUIDANCE.md)** — recommended patterns, with rationale: a way to
+  think about CI checks (the code-quality / security-floor / security-depth
+  tiers), sensible defaults and why, a getting-started walkthrough, runner notes,
+  optional branch protection, and prek coexistence. Nothing in it is required.
+- **[templates/](templates/)** — ready-to-copy workflows (a cookbook, not a form):
+  - `ci-arc.yml` — inline CI on a harmony-arc-runner (baked, tokenless floor).
+  - `ci-github-hosted.yml` — the same floor on `ubuntu-latest`, no baked image
+    (for repos without ARC access).
+  - `security-scan.yml` — a weekly, non-blocking security sweep that files a
+    tracking issue on findings.
+
+Copy the template that matches your runner, keep the jobs you want, drop the
+rest. The composite actions below are always there for bespoke pipelines — the
+guidance is a recommended starting point, not a mandate.
+
 ## What's here (and what isn't)
 
 - **Here (public):** thin composite actions that *invoke* the gates. Nothing else.
