@@ -1,0 +1,39 @@
+---
+name: python-typecheck (mypy via uv)
+description: >
+  Python type-check via the CALLER's own pinned type-checker (`uv run <checker>`),
+  reading the caller's config. A type-checker needs the resolved dependency graph,
+  so it MUST run in the consumer's uv env — this is exactly why it can't live in
+  the baked, env-independent gate library. The default checker is mypy (the fleet
+  standard, matching lattice + fire-risk-core); override `type-checker` to opt out
+  (e.g. basedpyright, pyrefly) — or just don't use this action if you type-check a
+  different way. Auto-detected: skips cleanly when the repo has no pyproject.toml.
+  Requires uv on PATH: baked into harmony-arc-runner; on github-hosted, run
+  astral-sh/setup-uv first.
+inputs:
+  type-checker:
+    description: >
+      Type-checker to run via `uv run` (mypy | basedpyright | pyrefly | …).
+      Must be a dev-dependency of the caller. Defaults to mypy.
+    required: false
+    default: mypy
+runs:
+  using: composite
+  steps:
+    - id: detect
+      shell: bash
+      run: |
+        if [ -f pyproject.toml ]; then
+          echo "python=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "python=false" >> "$GITHUB_OUTPUT"
+          echo "No pyproject.toml — python-typecheck skipped." >> "$GITHUB_STEP_SUMMARY"
+        fi
+    - if: steps.detect.outputs.python == 'true'
+      shell: bash
+      # The checker + its config come from the caller's project (pyproject
+      # [tool.mypy] etc.), resolved via uv. Passed via env (not interpolated into
+      # the script text) so the input can't inject shell.
+      env:
+        TYPE_CHECKER: ${{ inputs.type-checker }}
+      run: uv run "$TYPE_CHECKER"

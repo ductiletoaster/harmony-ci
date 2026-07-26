@@ -110,22 +110,20 @@ jobs:
   # detect via `if: hashFiles(...)` where it keeps the block safe on a mixed repo.
 
   # python:
-  #   name: python · ruff · mypy · pytest
+  #   name: python · lint · typecheck · test
   #   runs-on: ubuntu-latest
-  #   if: hashFiles('pyproject.toml', 'requirements*.txt') != ''
+  #   if: hashFiles('pyproject.toml') != ''
   #   steps:
   #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+  #     # No baked uv on github-hosted → install it first; the python-* actions
+  #     # then run YOUR OWN pinned ruff/mypy/pytest via `uv run`.
   #     - uses: astral-sh/setup-uv@v6
-  #     - name: Install dependencies
-  #       run: uv sync
-  #     - name: Ruff lint
-  #       run: uv run ruff check .
-  #     - name: Ruff format check
-  #       run: uv run ruff format --check .
-  #     - name: Typecheck
-  #       run: uv run mypy .
-  #     - name: Pytest
-  #       run: uv run pytest
+  #     # Granular: drop the type-check, or swap its checker, without touching
+  #     # lint or test. Pin to a harmony-ci SHA that includes the python-* actions.
+  #     - uses: ductiletoaster/harmony-ci/actions/python-lint@<sha>
+  #     - uses: ductiletoaster/harmony-ci/actions/python-typecheck@<sha>
+  #       # with: { type-checker: basedpyright }  # default is mypy (fleet standard)
+  #     - uses: ductiletoaster/harmony-ci/actions/python-test@<sha>
 
   # node:
   #   name: node · biome · tsc · test

@@ -47,7 +47,13 @@ None of these are requirements — they're the defaults we'd reach for, with why
 
 - **Code quality per language you use** (lint + format, typecheck, tests).
   Rationale: the cheapest, highest-signal feedback; catches most "oops" before
-  review. Gating it is usually worth the friction.
+  review. Gating it is usually worth the friction. For Python, the granular
+  **language-pack actions** (`actions/python-lint` · `python-typecheck` ·
+  `python-test`) run your own uv-pinned tools so CI matches local dev; adopt each
+  independently. The default type-checker is **mypy** (the fleet standard —
+  lattice + fire-risk-core); override or skip `python-typecheck` if you use
+  basedpyright/pyrefly. This rides on the baked uv in the arc runner — the runner
+  is the tooling; the actions are the convenience.
 - **A security floor** — secret scan (gitleaks), SAST (semgrep), dependency CVEs
   (osv-scanner), PR dependency-review. Rationale: these four catch the common
   supply-chain and secret-leak classes cheaply and deterministically, so they fit
