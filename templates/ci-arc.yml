@@ -1,0 +1,171 @@
+---
+# ci-arc.yml — inline CI on a harmony-arc-runner (COPY-AND-ADAPT STARTING POINT)
+#
+# A convenient starting point for a repo WITH ARC access (a self-hosted runner
+# built from the private harmony-arc-runner image, which bakes the gate tools +
+# rulesets + the offline OSV DB). GUIDANCE.md explains the reasoning behind the
+# tiers below. Everything here is optional — keep what fits, delete the rest.
+#
+# TO USE (adapt freely):
+#   1. Copy this file to YOUR repo as .github/workflows/ci.yml
+#   2. Replace every `<YOUR-ARC-LABEL>` with your ARC pool label
+#      (e.g. `harmony-cluster`, `fire-risk-ci`, `lattice`).
+#   3. Uncomment the code-quality block(s) for YOUR stack (Python/Node/IaC/Docker).
+#   4. (Optional) Add templates/security-scan.yml for a scheduled depth sweep.
+#   5. (Optional) If you want these to block merges, mark them required in branch
+#      protection — your call (see GUIDANCE.md).
+#
+# The composite actions below are pinned to a harmony-ci commit SHA — never a
+# floating tag. Bump the SHA however you like (Renovate/Dependabot/by hand).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ── SECURITY FLOOR (suggested: run inline; gate on NEW regressions) ────────
+  # Env-independent scanners from the harmony-ci composite-action library. If you
+  # gate them, they trip only on a NEW finding on a greened repo (baselined
+  # residue is grandfathered by the tool's own config: osv-scanner.toml, semgrep
+  # baseline). Drop any job you don't want.
+
+  gitleaks:
+    name: gitleaks (secret scan)
+    runs-on: <YOUR-ARC-LABEL>  # e.g. harmony-cluster / fire-risk-ci / lattice
+    steps:
+      # gitleaks scans the full history, so fetch-depth: 0 is REQUIRED.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: ductiletoaster/harmony-ci/actions/gitleaks@47af013018c07e12803ea3268698cba6a3f3e645 # v1
+
+  semgrep:
+    name: semgrep (SAST)
+    runs-on: <YOUR-ARC-LABEL>  # e.g. harmony-cluster / fire-risk-ci / lattice
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # Uses the baked, tokenless ruleset (/opt/semgrep/harmony-baseline.yaml).
+      # This is WHY arc is the recommended path — no SEMGREP_APP_TOKEN needed.
+      - uses: ductiletoaster/harmony-ci/actions/semgrep@47af013018c07e12803ea3268698cba6a3f3e645 # v1
+
+  osv-scanner:
+    name: osv-scanner (dependency CVEs)
+    runs-on: <YOUR-ARC-LABEL>  # e.g. harmony-cluster / fire-risk-ci / lattice
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # Reads the offline baked DB (egress-free). Seeded ecosystems:
+      # PyPI/npm/Go/Cargo — an unseeded ecosystem needs a runner-image seed entry.
+      - uses: ductiletoaster/harmony-ci/actions/osv-scanner@47af013018c07e12803ea3268698cba6a3f3e645 # v1
+
+  dependency-review:
+    name: dependency-review (PR only)
+    # PR-only: this action inspects the PR's dependency delta and has no meaning
+    # on a push to main. It is GitHub-hosted (not a baked-image gate), so it can
+    # run on ubuntu-latest even on an arc-first repo.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
+        with:
+          fail-on-severity: high
+
+  # ── CODE QUALITY (suggested: run inline) ──────────────────────────────────
+  # UNCOMMENT the block(s) for YOUR stack. lint+format → typecheck → tests.
+  # These run on the baked arc image (uv/ruff/tools pre-installed). Auto-detect
+  # via `if: hashFiles(...)` where it keeps the block safe on a mixed repo.
+
+  # python:
+  #   name: python · ruff · mypy · pytest
+  #   runs-on: <YOUR-ARC-LABEL>
+  #   # Runs only when the repo actually contains Python config.
+  #   if: hashFiles('pyproject.toml', 'requirements*.txt') != ''
+  #   steps:
+  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+  #     - name: Ruff lint
+  #       run: uv run ruff check .
+  #     - name: Ruff format check
+  #       run: uv run ruff format --check .
+  #     - name: Typecheck
+  #       # Pick ONE: mypy or basedpyright. Type-checking needs the resolved dep
+  #       # graph, so it lives here (env-aware), NOT in the composite gate library.
+  #       run: uv run mypy .
+  #     - name: Pytest
+  #       run: uv run pytest
+
+  # node:
+  #   name: node · biome · tsc · test
+  #   runs-on: <YOUR-ARC-LABEL>
+  #   if: hashFiles('package.json') != ''
+  #   steps:
+  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+  #     - name: Install dependencies
+  #       run: npm ci
+  #     - name: Biome check (lint + format)
+  #       run: npx @biomejs/biome check .
+  #     - name: Typecheck
+  #       run: npx tsc --noEmit
+  #     - name: Test
+  #       run: npm test
+
+  # iac:
+  #   name: iac · terraform fmt · validate · tflint
+  #   runs-on: <YOUR-ARC-LABEL>
+  #   if: hashFiles('**/*.tf') != ''
+  #   steps:
+  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+  #     - name: Terraform fmt check
+  #       run: terraform fmt -check -recursive
+  #     - name: Terraform validate
+  #       run: terraform validate
+  #     # tflint is also available as a harmony-ci composite action if you prefer
+  #     # the baked, egress-free variant: ductiletoaster/harmony-ci/actions/tflint.
+  #     - name: tflint
+  #       run: tflint --recursive --format compact
+
+  # docker:
+  #   name: docker · hadolint
+  #   runs-on: <YOUR-ARC-LABEL>
+  #   if: hashFiles('**/Dockerfile', '**/Dockerfile.*', '**/*.dockerfile') != ''
+  #   steps:
+  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+  #     # Or use the baked composite action:
+  #     # ductiletoaster/harmony-ci/actions/hadolint@<sha>
+  #     - name: hadolint
+  #       run: hadolint $(git ls-files '**/Dockerfile' '**/Dockerfile.*' '**/*.dockerfile')
+
+  # ── AGGREGATOR (a convenient single check) ────────────────────────────────
+  # https://github.com/marketplace/actions/alls-green#why
+  # A single, stable job that's green only if everything it `needs` passed. IF you
+  # decide to make CI block merges, this is a handy one check to require (so
+  # adding a language toggle later doesn't mean editing branch protection). Keep
+  # it on ubuntu-latest: re-actors/alls-green exit-127s on the arc image, and it
+  # needs no baked tooling. Add every code-quality job you uncommented to `needs`.
+  ci-alls-green:
+    name: CI all green
+    if: always()
+    needs:
+      - gitleaks
+      - semgrep
+      - osv-scanner
+      - dependency-review
+      # - python
+      # - node
+      # - iac
+      # - docker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide whether the needed jobs succeeded or failed
+        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
+          # dependency-review is skipped on push (PR-only); allow that.
+          allowed-skips: dependency-review
