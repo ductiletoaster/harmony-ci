@@ -53,9 +53,28 @@ Env-independent scanners; each is **blocking** on a greened repo (fails only on
 | `actions/tflint` | Terraform lint (auto-detected) | caller's `.tflint.hcl` |
 | `actions/hadolint` | Dockerfile lint (auto-detected) | caller's `.hadolint.yaml` |
 
-**Type-checking is deliberately not here** — it needs the resolved dependency
-graph, so it belongs in each consumer's own env-aware CI (e.g. `uv run mypy` /
-`uv run basedpyright`, `tsc --noEmit`).
+The scanners above are **env-independent** — they run baked tools on the runner
+and never need your dependencies installed.
+
+## Language-pack actions (uv-based, env-dependent)
+
+Code-quality checks that DO need the resolved dependency graph — type-checkers,
+tests — can't run as baked scanners, so these run **your own pinned tools** via
+`uv run`, matching your local dev exactly (no baked-vs-pinned skew). Granular by
+design: adopt each independently — drop the type-check, or swap its checker,
+without touching lint or test. Auto-detected (skip cleanly with no
+`pyproject.toml`). Require **uv on PATH** — baked into `harmony-arc-runner`; on
+github-hosted, run `astral-sh/setup-uv` first.
+
+| Action | What | Runs |
+|--------|------|------|
+| `actions/python-lint` | lint + format | `uv run ruff check .` + `uv run ruff format --check .` |
+| `actions/python-typecheck` | type-check | `uv run <type-checker>` — input `type-checker`, default **mypy** (the fleet standard); override for basedpyright / pyrefly |
+| `actions/python-test` | tests | `uv run pytest` (+ optional `args`) |
+
+(`actions/ruff` above is the **baked, env-independent** lint variant for repos
+without uv; `python-lint` uses your uv-pinned ruff for version-consistency with
+the other `uv run` steps. Use whichever fits.)
 
 ## Requirements
 

@@ -1,0 +1,29 @@
+---
+name: python-lint (ruff via uv)
+description: >
+  Python lint + format check via the CALLER's own pinned ruff (`uv run ruff`),
+  reading the caller's [tool.ruff] config. Using the consumer's ruff (a dev-dep)
+  keeps CI identical to local dev and to the other uv-run steps — no baked-vs-
+  pinned version skew. Auto-detected: skips cleanly (not silent-green) when the
+  repo has no pyproject.toml, so it's safe on a mixed/non-Python job.
+  Requires uv on PATH: baked into harmony-arc-runner; on github-hosted, run
+  astral-sh/setup-uv before this. (For a repo WITHOUT uv, use actions/ruff — the
+  baked, env-independent variant — instead.)
+runs:
+  using: composite
+  steps:
+    - id: detect
+      shell: bash
+      run: |
+        if [ -f pyproject.toml ]; then
+          echo "python=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "python=false" >> "$GITHUB_OUTPUT"
+          echo "No pyproject.toml — python-lint skipped." >> "$GITHUB_STEP_SUMMARY"
+        fi
+    - if: steps.detect.outputs.python == 'true'
+      shell: bash
+      run: uv run ruff check .
+    - if: steps.detect.outputs.python == 'true'
+      shell: bash
+      run: uv run ruff format --check .
