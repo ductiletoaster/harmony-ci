@@ -1,11 +1,10 @@
 ---
 # ci-github-hosted.yml — the SAME security floor on ubuntu-latest, NO baked
-# image (COPY-AND-TUNE TEMPLATE).
+# image (COPY-AND-ADAPT STARTING POINT).
 #
 # For repos WITHOUT ARC access. Instead of the baked harmony-arc-runner, tools
-# come from public marketplace actions / on-the-fly installs. This is the floor
-# for the github-hosted consumer repos that have zero security today. See
-# STANDARD.md.
+# come from public marketplace actions / on-the-fly installs — often the easiest
+# on-ramp. GUIDANCE.md explains the reasoning. Keep what fits, delete the rest.
 #
 # ARC vs github-hosted parity (see the SAST caveat below):
 #   gitleaks           ✅ full parity (gitleaks/gitleaks-action)
@@ -13,11 +12,12 @@
 #   dependency-review  ✅ full parity (actions/dependency-review-action)
 #   semgrep            ⚠️  NEEDS a token OR a vendored ruleset — see below.
 #
-# TO ADOPT:
+# TO USE (adapt freely):
 #   1. Copy this file to YOUR repo as .github/workflows/ci.yml
 #   2. Uncomment the code-quality block(s) for YOUR stack (all public tools).
-#   3. Add templates/security-scan.yml for the scheduled DEPTH sweep.
-#   4. Mark the required checks in branch protection (see STANDARD.md).
+#   3. (Optional) Add templates/security-scan.yml for a scheduled depth sweep.
+#   4. (Optional) If you want these to block merges, mark them required — your
+#      call (see GUIDANCE.md).
 name: CI
 
 on:
@@ -29,10 +29,10 @@ permissions:
   contents: read
 
 jobs:
-  # ── SECURITY FLOOR (always inline, blocking on NEW regressions) ────────────
+  # ── SECURITY FLOOR (suggested: run inline; gate on NEW regressions) ────────
   # Sourced from public actions — no baked runner needed. The WORKING floor on
   # github-hosted is gitleaks + osv-scanner + dependency-review (semgrep needs
-  # extra setup — see its job).
+  # extra setup — see its job). Drop any job you don't want.
 
   gitleaks:
     name: gitleaks (secret scan)
@@ -104,7 +104,7 @@ jobs:
   #     # Variant B — a ruleset you vendor into the repo (no token, no login):
   #     - run: uvx semgrep scan --config .semgrep/rules.yml --error --metrics=off
 
-  # ── CODE QUALITY (always inline, blocking) ────────────────────────────────
+  # ── CODE QUALITY (suggested: run inline) ──────────────────────────────────
   # UNCOMMENT the block(s) for YOUR stack. lint+format → typecheck → tests.
   # All public tools, so these behave identically to the arc template. Auto-
   # detect via `if: hashFiles(...)` where it keeps the block safe on a mixed repo.
@@ -170,10 +170,11 @@ jobs:
   #       with:
   #         recursive: true
 
-  # ── BRANCH-PROTECTION AGGREGATOR ──────────────────────────────────────────
+  # ── AGGREGATOR (a convenient single check) ────────────────────────────────
   # https://github.com/marketplace/actions/alls-green#why
-  # A single, stable required-check for branch protection. Add every code-quality
-  # job you uncommented (and semgrep, if enabled) to `needs`.
+  # Green only if everything it `needs` passed. IF you decide to make CI block
+  # merges, this is a handy one check to require. Add every code-quality job you
+  # uncommented (and semgrep, if enabled) to `needs`.
   ci-alls-green:
     name: CI all green
     if: always()

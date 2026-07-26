@@ -1,25 +1,25 @@
 ---
-# security-scan.yml — scheduled weekly security DEPTH sweep (COPY-AND-TUNE
-# TEMPLATE).
+# security-scan.yml — scheduled weekly security sweep (COPY-AND-ADAPT STARTING
+# POINT).
 #
-# This is the DEPTH tier from STANDARD.md: full/ONLINE scans that shouldn't gate
-# every PR. It is NON-BLOCKING to your PRs — it runs on a schedule, never on a
-# pull_request. A scan job that finds something goes red, and the final `report`
-# job (if: always()) opens or comments on ONE tracking issue. Because it never
-# runs on PRs, a red scan can't block a merge — it just files a to-do. Run it in
-# EVERY consumer repo alongside the inline ci-<arc|github-hosted>.yml floor.
+# The "depth" idea from GUIDANCE.md: full/ONLINE scans that are a poor fit for a
+# per-PR gate. It runs on a schedule, never on a pull_request, so it can't block
+# a merge — a scan that finds something goes red and the final `report` job
+# (if: always()) opens or comments on ONE tracking issue. A convenient companion
+# to the inline ci-<arc|github-hosted>.yml floor. Optional — use it if it helps.
 #
 # Why scheduled, not inline:
 #   - ONLINE OSV re-scans UNCHANGED deps against the freshest CVE feed — a CVE
 #     disclosed today should surface even if nobody touched the lockfile.
-#   - Full/online scans are slower and noisier; gating every PR on them is hostile.
+#   - Full/online scans are slower and noisier, so gating every PR on them adds
+#     friction for little benefit; a scheduled to-do is a gentler fit.
 #
-# TO ADOPT:
+# TO USE (adapt freely):
 #   1. Copy this file to YOUR repo as .github/workflows/security-scan.yml
 #   2. Set <YOUR-LABEL> (defaults to ubuntu-latest — these are ONLINE scans and
 #      do NOT need the baked arc image).
 #   3. Enable/disable the OPTIONAL jobs (Trivy, full semgrep) per repo.
-#   4. This workflow does NOT need to be a required check (it's non-blocking).
+#   4. No need to make this a required check — it's non-blocking by design.
 name: Security Scan (scheduled)
 
 on:
@@ -139,6 +139,6 @@ jobs:
           else
             # Requires a `security` label to exist in the repo (create it once:
             # `gh label create security`). Drop --label if you don't want one.
-            printf 'Automated weekly security sweep (DEPTH tier).\n\n%s\n' "${note}" \
+            printf 'Automated weekly security sweep.\n\n%s\n' "${note}" \
               | gh issue create --title "${title}" --label security --body-file -
           fi

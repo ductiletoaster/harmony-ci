@@ -1,20 +1,22 @@
 ---
-# ci-arc.yml — inline CI on a harmony-arc-runner (COPY-AND-TUNE TEMPLATE)
+# ci-arc.yml — inline CI on a harmony-arc-runner (COPY-AND-ADAPT STARTING POINT)
 #
-# This is the recommended baseline for a repo WITH ARC access (a self-hosted
-# runner built from the private harmony-arc-runner image, which bakes the gate
-# tools + rulesets + the offline OSV DB). See STANDARD.md for the taxonomy.
+# A convenient starting point for a repo WITH ARC access (a self-hosted runner
+# built from the private harmony-arc-runner image, which bakes the gate tools +
+# rulesets + the offline OSV DB). GUIDANCE.md explains the reasoning behind the
+# tiers below. Everything here is optional — keep what fits, delete the rest.
 #
-# TO ADOPT:
+# TO USE (adapt freely):
 #   1. Copy this file to YOUR repo as .github/workflows/ci.yml
 #   2. Replace every `<YOUR-ARC-LABEL>` with your ARC pool label
 #      (e.g. `harmony-cluster`, `fire-risk-ci`, `lattice`).
 #   3. Uncomment the code-quality block(s) for YOUR stack (Python/Node/IaC/Docker).
-#   4. Add templates/security-scan.yml for the scheduled DEPTH sweep.
-#   5. Mark the required checks in branch protection (see STANDARD.md).
+#   4. (Optional) Add templates/security-scan.yml for a scheduled depth sweep.
+#   5. (Optional) If you want these to block merges, mark them required in branch
+#      protection — your call (see GUIDANCE.md).
 #
 # The composite actions below are pinned to a harmony-ci commit SHA — never a
-# floating tag. Let Renovate/Dependabot bump the SHA through reviewed PRs.
+# floating tag. Bump the SHA however you like (Renovate/Dependabot/by hand).
 name: CI
 
 on:
@@ -26,10 +28,11 @@ permissions:
   contents: read
 
 jobs:
-  # ── SECURITY FLOOR (always inline, blocking on NEW regressions) ────────────
-  # Env-independent scanners from the harmony-ci composite-action library. Each
-  # blocks only on a NEW finding on a greened repo (baselined residue is
-  # grandfathered by the tool's own config: osv-scanner.toml, semgrep baseline).
+  # ── SECURITY FLOOR (suggested: run inline; gate on NEW regressions) ────────
+  # Env-independent scanners from the harmony-ci composite-action library. If you
+  # gate them, they trip only on a NEW finding on a greened repo (baselined
+  # residue is grandfathered by the tool's own config: osv-scanner.toml, semgrep
+  # baseline). Drop any job you don't want.
 
   gitleaks:
     name: gitleaks (secret scan)
@@ -75,7 +78,7 @@ jobs:
         with:
           fail-on-severity: high
 
-  # ── CODE QUALITY (always inline, blocking) ────────────────────────────────
+  # ── CODE QUALITY (suggested: run inline) ──────────────────────────────────
   # UNCOMMENT the block(s) for YOUR stack. lint+format → typecheck → tests.
   # These run on the baked arc image (uv/ruff/tools pre-installed). Auto-detect
   # via `if: hashFiles(...)` where it keeps the block safe on a mixed repo.
@@ -139,11 +142,13 @@ jobs:
   #     - name: hadolint
   #       run: hadolint $(git ls-files '**/Dockerfile' '**/Dockerfile.*' '**/*.dockerfile')
 
-  # ── BRANCH-PROTECTION AGGREGATOR ──────────────────────────────────────────
+  # ── AGGREGATOR (a convenient single check) ────────────────────────────────
   # https://github.com/marketplace/actions/alls-green#why
-  # A single, stable required-check for branch protection. Keep it on
-  # ubuntu-latest: re-actors/alls-green exit-127s on the arc image, and it needs
-  # no baked tooling. Add every code-quality job you uncommented to `needs`.
+  # A single, stable job that's green only if everything it `needs` passed. IF you
+  # decide to make CI block merges, this is a handy one check to require (so
+  # adding a language toggle later doesn't mean editing branch protection). Keep
+  # it on ubuntu-latest: re-actors/alls-green exit-127s on the arc image, and it
+  # needs no baked tooling. Add every code-quality job you uncommented to `needs`.
   ci-alls-green:
     name: CI all green
     if: always()
