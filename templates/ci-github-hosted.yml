@@ -120,10 +120,10 @@ jobs:
   #     - uses: astral-sh/setup-uv@v6
   #     # Granular: drop the type-check, or swap its checker, without touching
   #     # lint or test. Pin to a harmony-ci SHA that includes the python-* actions.
-  #     - uses: ductiletoaster/harmony-ci/actions/python-lint@<sha>
-  #     - uses: ductiletoaster/harmony-ci/actions/python-typecheck@<sha>
+  #     - uses: ductiletoaster/harmony-ci/actions/python-lint@d4e999f57e3a452f8b334b961e8fe4b546e02255 # main
+  #     - uses: ductiletoaster/harmony-ci/actions/python-typecheck@d4e999f57e3a452f8b334b961e8fe4b546e02255 # main
   #       # with: { type-checker: basedpyright }  # default is mypy (fleet standard)
-  #     - uses: ductiletoaster/harmony-ci/actions/python-test@<sha>
+  #     - uses: ductiletoaster/harmony-ci/actions/python-test@d4e999f57e3a452f8b334b961e8fe4b546e02255 # main
 
   # node:
   #   name: node · biome · tsc · test
