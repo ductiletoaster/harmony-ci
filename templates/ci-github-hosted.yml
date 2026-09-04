@@ -104,6 +104,21 @@ jobs:
   #     # Variant B — a ruleset you vendor into the repo (no token, no login):
   #     - run: uvx semgrep scan --config .semgrep/rules.yml --error --metrics=off
 
+  # agent-skills:
+  #   name: skill layout
+  #   runs-on: ubuntu-latest
+  #   # Only for repos shipping agent skills. Layout is what fails SILENTLY:
+  #   # frontmatter can be perfect while the file sits where no harness reads it.
+  #   # One consumer ran 26 local skills invisible to every Claude Code session
+  #   # for months, with no error anywhere.
+  #   if: hashFiles('.agents/skills/**', '.claude/skills/**', 'skills/**') != ''
+  #   steps:
+  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+  #     # The RULE lives in pixeloven/crew, pinned by tag; this action is only
+  #     # the plumbing, so there is one definition rather than a copy per repo --
+  #     # copies are the drift this gate exists to catch.
+  #     - uses: ductiletoaster/harmony-ci/actions/skill-layout@main
+
   # ── CODE QUALITY (suggested: run inline) ──────────────────────────────────
   # UNCOMMENT the block(s) for YOUR stack. lint+format → typecheck → tests.
   # All public tools, so these behave identically to the arc template. Auto-

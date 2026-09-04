@@ -52,6 +52,7 @@ Env-independent scanners; each is **blocking** on a greened repo (fails only on
 | `actions/osv-scanner` | dependency CVEs (offline baked DB) | caller's lockfiles + `osv-scanner.toml` |
 | `actions/tflint` | Terraform lint (auto-detected) | caller's `.tflint.hcl` |
 | `actions/hadolint` | Dockerfile lint (auto-detected) | caller's `.hadolint.yaml` |
+| `actions/skill-layout` | agent skills sit where their harness reads them — flat files, dangling symlinks, name/dir mismatch (auto-detected) | rule pinned from `pixeloven/crew` |
 
 The scanners above are **env-independent** — they run baked tools on the runner
 and never need your dependencies installed.

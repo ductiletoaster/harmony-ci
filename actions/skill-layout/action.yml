@@ -1,0 +1,53 @@
+---
+name: skill layout (agent skills)
+description: >
+  Assert every agent skill sits where its harness actually reads it —
+  <name>/SKILL.md, no flat files, no dangling symlinks, name matching directory.
+  Auto-detected: skips cleanly (not silent-green) when the repo ships no skills.
+  BLOCKING. The rule lives in pixeloven/crew; this is only the plumbing, so
+  there is one definition rather than a copy per repo.
+inputs:
+  crew-ref:
+    description: pixeloven/crew tag carrying the checker. Pin it; do not track a branch.
+    required: false
+    default: v0.28.0
+  root:
+    description: Repository root to check.
+    required: false
+    default: "."
+runs:
+  using: composite
+  steps:
+    - id: detect
+      shell: bash
+      run: |
+        set -euo pipefail
+        found=false
+        for d in .agents/skills .claude/skills skills; do
+          if [ -d "${{ inputs.root }}/$d" ]; then found=true; fi
+        done
+        echo "skills=$found" >> "$GITHUB_OUTPUT"
+        if [ "$found" = false ]; then
+          echo "No .agents/skills, .claude/skills or skills/ — skill-layout skipped." \
+            >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - if: steps.detect.outputs.skills == 'true'
+      shell: bash
+      env:
+        CREW_REF: ${{ inputs.crew-ref }}
+      run: |
+        set -euo pipefail
+        # Fetched at a pinned tag rather than vendored: a copy per repo is the
+        # drift that produced the defect this gate exists to catch.
+        script="$(mktemp)"
+        curl -fsSL --retry 3 --retry-all-errors \
+          "https://raw.githubusercontent.com/pixeloven/crew/${CREW_REF}/scripts/check_skill_layout.py" \
+          -o "$script"
+
+        # Selftest first. A gate that reports green proves nothing until it has
+        # been watched rejecting something -- and a truncated or wrong-version
+        # download would otherwise pass silently.
+        python3 "$script" --selftest
+
+        python3 "$script" "${{ inputs.root }}"
