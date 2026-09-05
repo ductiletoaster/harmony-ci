@@ -85,11 +85,40 @@ the other `uv run` steps. Use whichever fits.)
 Runners built from **`harmony-arc-runner`** (baked tools + rulesets + offline OSV
 DB). The actions assume the repo is already checked out (they don't checkout).
 
-## How to consume — your own workflow, pinned by SHA
+## Versioning — exact semver, and what a bump means
 
-These actions run in your CI on runners that hold write-capable tokens, so they're
-a **supply-chain surface**: pin every `uses:` to a full commit **SHA**, never
-`@main` or a floating tag. Let Renovate bump the SHAs through reviewed PRs.
+This repo cuts a **semver release per change**. `VERSION` at the repo root is the
+source of truth; merging a bump to `main` tags `vX.Y.Z` and publishes a GitHub
+Release (`.github/workflows/release.yml`). There is no artifact to build — for a
+consumed action library, the tag *is* the release.
+
+What the numbers mean for a gate library, where the interface is the action
+inputs **and the verdict**:
+
+| Bump | Means |
+|------|-------|
+| **major** | a gate can now fail a build that previously passed — a required input, a removed action, or **widened detection** |
+| **minor** | new action, new optional input, strictly-additive capability |
+| **patch** | fix with no change to what passes |
+
+Widened detection is a **major** on purpose. A consumer bumping a minor should
+never have to budget for a newly-red pipeline.
+
+There are deliberately **no moving `v1` / `v1.2` alias tags**. A moving tag is a
+floating pin wearing a version number, so this repo does not publish one.
+
+## How to consume — your own workflow, pinned to an exact version
+
+These actions run in your CI on runners that hold write-capable tokens, so
+they're a **supply-chain surface**. Pin every `uses:` to an **exact semver tag**
+— `@v1.0.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
+
+Why exact semver rather than a SHA: a SHA is immutable but opaque — it carries no
+signal about *what changed*, so every bump is an unreviewable 40-character diff
+and there is nothing to read before taking it. An exact version tag is equally
+pinned in practice (this repo never moves a published tag) while telling you
+whether you are taking a patch or a behaviour change, and it points at release
+notes. Let Renovate bump the version through reviewed PRs.
 
 ```yaml
 # .github/workflows/ci-gates.yml — a workflow YOU own and can tailor
@@ -104,15 +133,15 @@ jobs:
     name: gitleaks (secret scan)
     runs-on: fire-risk-ci            # your ARC pool label
     steps:
-      - uses: actions/checkout@<sha>
+      - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: ductiletoaster/harmony-ci/actions/gitleaks@<sha>
+      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v1.0.0
   semgrep:
     name: semgrep (SAST)
     runs-on: fire-risk-ci
     steps:
-      - uses: actions/checkout@<sha>
-      - uses: ductiletoaster/harmony-ci/actions/semgrep@<sha>
+      - uses: actions/checkout@v4
+      - uses: ductiletoaster/harmony-ci/actions/semgrep@v1.0.0
   # …add ruff / osv-scanner / tflint / hadolint the same way; drop any you don't want.
 ```
 
@@ -124,6 +153,7 @@ protection required-checks are yours to define.
 - **Thin by construction** — no secrets, tools, or infra specifics in this repo.
 - **Branch protection** — PR + CODEOWNERS review, admins included, no force-push,
   linear history. Every change is reviewed.
-- **Immutable consumption** — consumers pin by SHA.
-- **Self-linting CI** — this repo lints its own workflow + actions (yamllint) and
-  pins the actions it uses to commit SHAs.
+- **Immutable consumption** — consumers pin an exact semver tag, and this repo
+  never moves a published tag or publishes a moving major alias.
+- **Self-linting CI** — this repo lints its own workflow + actions (yamllint +
+  actionlint) and validates that `VERSION` is strict semver on every PR.

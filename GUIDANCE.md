@@ -61,10 +61,15 @@ None of these are requirements — they're the defaults we'd reach for, with why
 - **A scheduled depth sweep** (`security-scan.yml`). Rationale: catches CVEs
   disclosed after your last commit, and heavier scans, without gating PRs.
   Non-blocking by construction — it files an issue.
-- **SHA-pin every `uses:`.** Rationale: a floating tag can be moved under you; a
-  workflow runs with a write-capable token, so this is a real supply-chain
-  surface. (Whether you use Renovate, Dependabot, or bump by hand to keep those
-  pins fresh is entirely your choice.)
+- **Pin every `uses:` to an exact semver tag** (`@v1.0.0`) — never `@main`, never
+  a bare major (`@v1`), never a SHA. Rationale: a workflow runs with a
+  write-capable token, so a floating ref is a real supply-chain surface; but a
+  SHA over-corrects — it pins without telling you *what changed*, so every bump
+  is an unreviewable 40-character diff. An exact version is pinned in practice
+  and readable, which is what makes the bump reviewable. harmony-ci publishes a
+  release per change for exactly this (see the README's versioning table for what
+  a major means here). Whether you use Renovate, Dependabot, or bump by hand is
+  your choice.
 
 Skip, reorder, or extend any of this to fit your project.
 

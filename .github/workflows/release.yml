@@ -1,0 +1,71 @@
+---
+# Semver releases for a repo that is CONSUMED, not built.
+#
+# harmony-ci ships no artifact: the release IS the tag, because a tag is what
+# consumers pin (`uses: ductiletoaster/harmony-ci/actions/<gate>@v1.2.3`). The
+# fleet rule is exact-semver pinning, so this repo has to actually produce
+# versions to pin — see README "How to consume".
+#
+# Tag-only, no push to main, so it stays branch-protection-friendly.
+#
+# NOTE (learned from pixeloven/lattice's release.yml): a tag pushed with
+# GITHUB_TOKEN does NOT fire another workflow's `on: push`. Lattice works around
+# that by explicitly dispatching its image build for the new tag. harmony-ci
+# needs no such dispatch — there is nothing to build on a tag, and the GitHub
+# Release below is created in THIS job via the API rather than by a tag-triggered
+# workflow. If a tag-triggered workflow is ever added here it will NOT run on its
+# own, and must be dispatched explicitly the way lattice does.
+name: Release (tag on version change)
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write  # create the tag and the GitHub Release
+
+jobs:
+  tag:
+    name: Tag VERSION
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Tag VERSION and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ver="$(tr -d '[:space:]' < VERSION)"
+
+          # Strict semver (no pre-release / build metadata): consumers pin exact
+          # versions, so an unparseable VERSION must fail here rather than
+          # produce a tag nobody can pin. ci.yml runs the same check on PRs, so
+          # this is the backstop, not the first line of defence.
+          if ! printf '%s' "$ver" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error file=VERSION::VERSION is not strict semver: '$ver'"
+            exit 1
+          fi
+
+          if git rev-parse -q --verify "refs/tags/v$ver" >/dev/null; then
+            echo "v$ver is already tagged — bump VERSION to cut a release."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "v$ver"
+          git push origin "v$ver"
+          echo "Tagged v$ver"
+
+          # A GitHub Release (not just the tag) is what makes the version show up
+          # in the releases API and gives consumers somewhere to read what
+          # changed before they move their pin.
+          gh release create "v$ver" --title "v$ver" --generate-notes --verify-tag
+          echo "Published release v$ver" >> "$GITHUB_STEP_SUMMARY"
+
+          # Deliberately NOT publishing a moving `v1` / `v1.2` alias tag. A moving
+          # major tag is exactly the floating pin the fleet rule forbids, and
+          # publishing one invites the violation it exists to prevent.
