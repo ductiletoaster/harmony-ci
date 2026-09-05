@@ -117,7 +117,7 @@ jobs:
   #     # The RULE lives in pixeloven/crew, pinned by tag; this action is only
   #     # the plumbing, so there is one definition rather than a copy per repo --
   #     # copies are the drift this gate exists to catch.
-  #     - uses: ductiletoaster/harmony-ci/actions/skill-layout@v1.0.0
+  #     - uses: ductiletoaster/harmony-ci/actions/skill-layout@v2.0.0
 
   # ── CODE QUALITY (suggested: run inline) ──────────────────────────────────
   # UNCOMMENT the block(s) for YOUR stack. lint+format → typecheck → tests.
@@ -135,10 +135,10 @@ jobs:
   #     - uses: astral-sh/setup-uv@v6
   #     # Granular: drop the type-check, or swap its checker, without touching
   #     # lint or test. Pin to a harmony-ci version that ships the python-* actions.
-  #     - uses: ductiletoaster/harmony-ci/actions/python-lint@v1.0.0
-  #     - uses: ductiletoaster/harmony-ci/actions/python-typecheck@v1.0.0
+  #     - uses: ductiletoaster/harmony-ci/actions/python-lint@v2.0.0
+  #     - uses: ductiletoaster/harmony-ci/actions/python-typecheck@v2.0.0
   #       # with: { type-checker: basedpyright }  # default is mypy (fleet standard)
-  #     - uses: ductiletoaster/harmony-ci/actions/python-test@v1.0.0
+  #     - uses: ductiletoaster/harmony-ci/actions/python-test@v2.0.0
 
   # node:
   #   name: node · biome · tsc · test
