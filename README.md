@@ -170,7 +170,7 @@ floating pin wearing a version number, so this repo does not publish one.
 
 These actions run in your CI on runners that hold write-capable tokens, so
 they're a **supply-chain surface**. Pin every `uses:` to an **exact semver tag**
-— `@v1.0.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
+— `@v2.0.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
 
 Why exact semver rather than a SHA: a SHA is immutable but opaque — it carries no
 signal about *what changed*, so every bump is an unreviewable 40-character diff
@@ -194,13 +194,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v1.0.0
+      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v2.0.0
   semgrep:
     name: semgrep (SAST)
     runs-on: fire-risk-ci
     steps:
       - uses: actions/checkout@v4
-      - uses: ductiletoaster/harmony-ci/actions/semgrep@v1.0.0
+      - uses: ductiletoaster/harmony-ci/actions/semgrep@v2.0.0
   # …add ruff / osv-scanner / tflint / hadolint the same way; drop any you don't want.
 ```
 
