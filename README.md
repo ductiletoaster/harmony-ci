@@ -49,7 +49,7 @@ Env-independent scanners; each is **blocking** on a greened repo (fails only on
 | `actions/gitleaks` | secret scan over git history; **asserts history depth** — see below | — |
 | `actions/semgrep` | SAST | baked ruleset `/opt/semgrep/harmony-baseline.yaml` |
 | `actions/ruff` | Python lint + format (auto-detected) | caller's `pyproject.toml` |
-| `actions/osv-scanner` | dependency CVEs (offline baked DB) | caller's lockfiles + `osv-scanner.toml` |
+| `actions/osv-scanner` | dependency CVEs (offline baked DB); **asserts coverage** — see below | caller's lockfiles + `osv-scanner.toml` |
 | `actions/tflint` | Terraform lint (auto-detected) | caller's `.tflint.hcl` |
 | `actions/hadolint` | Dockerfile lint (auto-detected) | caller's `.hadolint.yaml` |
 | `actions/skill-layout` | agent skills sit where their harness reads them — flat files, dangling symlinks, name/dir mismatch (auto-detected) | rule pinned from `pixeloven/crew` |
@@ -90,6 +90,32 @@ The scan runs with `--exit-code 2`, so "leaks found" and "gitleaks itself died"
 (a bad config or an unreadable source — both exit **1** by default) can no
 longer be reported as the same thing.
 
+### osv-scanner: coverage is asserted, not assumed
+
+A dependency-CVE gate that examines **zero packages** reports the same green
+check as one that examined everything and found nothing. `actions/osv-scanner`
+refuses to do that: it scans with `--all-packages`, counts what was actually
+examined, prints that count to the job summary on **every** run, and **fails** if
+it comes to zero.
+
+The concrete trap this closes: osv-scanner's directory walk **honours
+`.gitignore`**, so a repo that gitignores `uv.lock` scans nothing at all —
+`0 Extract calls`, "No package sources found". Worse, if such a repo also has any
+*other* extractable file, the run exits **0 with real vulnerabilities
+unexamined**, and nothing anywhere says so. Generating the lockfile in CI first
+does not help; it is skipped for being gitignored, not for being absent.
+
+| Input | Default | What it does |
+|---|---|---|
+| `include-git-ignored` | `true` | Scan lockfiles `.gitignore` excludes. Turning this off opts back in to the blindness above. |
+| `lockfiles` | — | Name lockfiles explicitly (`-L`), for a lockfile the walk can't find. Runs as a separate scan and is merged in. |
+| `paths` | `.` | Directories to walk. |
+| `allow-empty` | `false` | Let a zero-package scan pass. Only for a repo with genuinely no dependency manifest — an explicit, reviewable statement that this gate covers nothing here. |
+
+The action never passes osv-scanner's `--allow-no-lockfiles`, which prints
+"No package sources found / No issues found" and exits **0** — the silent pass in
+its purest form.
+
 ## Language-pack actions (uv-based, env-dependent)
 
 Code-quality checks that DO need the resolved dependency graph — type-checkers,
@@ -118,11 +144,40 @@ the other `uv run` steps. Use whichever fits.)
 Runners built from **`harmony-arc-runner`** (baked tools + rulesets + offline OSV
 DB). The actions assume the repo is already checked out (they don't checkout).
 
-## How to consume — your own workflow, pinned by SHA
+## Versioning — exact semver, and what a bump means
 
-These actions run in your CI on runners that hold write-capable tokens, so they're
-a **supply-chain surface**: pin every `uses:` to a full commit **SHA**, never
-`@main` or a floating tag. Let Renovate bump the SHAs through reviewed PRs.
+This repo cuts a **semver release per change**. `VERSION` at the repo root is the
+source of truth; merging a bump to `main` tags `vX.Y.Z` and publishes a GitHub
+Release (`.github/workflows/release.yml`). There is no artifact to build — for a
+consumed action library, the tag *is* the release.
+
+What the numbers mean for a gate library, where the interface is the action
+inputs **and the verdict**:
+
+| Bump | Means |
+|------|-------|
+| **major** | a gate can now fail a build that previously passed — a required input, a removed action, or **widened detection** |
+| **minor** | new action, new optional input, strictly-additive capability |
+| **patch** | fix with no change to what passes |
+
+Widened detection is a **major** on purpose. A consumer bumping a minor should
+never have to budget for a newly-red pipeline.
+
+There are deliberately **no moving `v1` / `v1.2` alias tags**. A moving tag is a
+floating pin wearing a version number, so this repo does not publish one.
+
+## How to consume — your own workflow, pinned to an exact version
+
+These actions run in your CI on runners that hold write-capable tokens, so
+they're a **supply-chain surface**. Pin every `uses:` to an **exact semver tag**
+— `@v1.0.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
+
+Why exact semver rather than a SHA: a SHA is immutable but opaque — it carries no
+signal about *what changed*, so every bump is an unreviewable 40-character diff
+and there is nothing to read before taking it. An exact version tag is equally
+pinned in practice (this repo never moves a published tag) while telling you
+whether you are taking a patch or a behaviour change, and it points at release
+notes. Let Renovate bump the version through reviewed PRs.
 
 ```yaml
 # .github/workflows/ci-gates.yml — a workflow YOU own and can tailor
@@ -137,15 +192,15 @@ jobs:
     name: gitleaks (secret scan)
     runs-on: fire-risk-ci            # your ARC pool label
     steps:
-      - uses: actions/checkout@<sha>
+      - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: ductiletoaster/harmony-ci/actions/gitleaks@<sha>
+      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v1.0.0
   semgrep:
     name: semgrep (SAST)
     runs-on: fire-risk-ci
     steps:
-      - uses: actions/checkout@<sha>
-      - uses: ductiletoaster/harmony-ci/actions/semgrep@<sha>
+      - uses: actions/checkout@v4
+      - uses: ductiletoaster/harmony-ci/actions/semgrep@v1.0.0
   # …add ruff / osv-scanner / tflint / hadolint the same way; drop any you don't want.
 ```
 
@@ -157,6 +212,7 @@ protection required-checks are yours to define.
 - **Thin by construction** — no secrets, tools, or infra specifics in this repo.
 - **Branch protection** — PR + CODEOWNERS review, admins included, no force-push,
   linear history. Every change is reviewed.
-- **Immutable consumption** — consumers pin by SHA.
-- **Self-linting CI** — this repo lints its own workflow + actions (yamllint) and
-  pins the actions it uses to commit SHAs.
+- **Immutable consumption** — consumers pin an exact semver tag, and this repo
+  never moves a published tag or publishes a moving major alias.
+- **Self-linting CI** — this repo lints its own workflow + actions (yamllint +
+  actionlint) and validates that `VERSION` is strict semver on every PR.
