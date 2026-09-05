@@ -117,7 +117,7 @@ jobs:
   #     # The RULE lives in pixeloven/crew, pinned by tag; this action is only
   #     # the plumbing, so there is one definition rather than a copy per repo --
   #     # copies are the drift this gate exists to catch.
-  #     - uses: ductiletoaster/harmony-ci/actions/skill-layout@main
+  #     - uses: ductiletoaster/harmony-ci/actions/skill-layout@v1.0.0
 
   # ── CODE QUALITY (suggested: run inline) ──────────────────────────────────
   # UNCOMMENT the block(s) for YOUR stack. lint+format → typecheck → tests.
@@ -134,11 +134,11 @@ jobs:
   #     # then run YOUR OWN pinned ruff/mypy/pytest via `uv run`.
   #     - uses: astral-sh/setup-uv@v6
   #     # Granular: drop the type-check, or swap its checker, without touching
-  #     # lint or test. Pin to a harmony-ci SHA that includes the python-* actions.
-  #     - uses: ductiletoaster/harmony-ci/actions/python-lint@d4e999f57e3a452f8b334b961e8fe4b546e02255 # main
-  #     - uses: ductiletoaster/harmony-ci/actions/python-typecheck@d4e999f57e3a452f8b334b961e8fe4b546e02255 # main
+  #     # lint or test. Pin to a harmony-ci version that ships the python-* actions.
+  #     - uses: ductiletoaster/harmony-ci/actions/python-lint@v1.0.0
+  #     - uses: ductiletoaster/harmony-ci/actions/python-typecheck@v1.0.0
   #       # with: { type-checker: basedpyright }  # default is mypy (fleet standard)
-  #     - uses: ductiletoaster/harmony-ci/actions/python-test@d4e999f57e3a452f8b334b961e8fe4b546e02255 # main
+  #     - uses: ductiletoaster/harmony-ci/actions/python-test@v1.0.0
 
   # node:
   #   name: node · biome · tsc · test
