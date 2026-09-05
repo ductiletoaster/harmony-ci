@@ -18,6 +18,10 @@ inputs:
     description: Version of the Claude Code CLI used for native validation.
     required: false
     default: latest
+  codex-version:
+    description: Version of the Codex CLI used for the observational check.
+    required: false
+    default: latest
 runs:
   using: composite
   steps:
@@ -80,3 +84,70 @@ runs:
         # pass silently, which is the failure mode this gate exists for.
         python3 "$script" --selftest
         python3 "$script" '${{ inputs.root }}'
+
+    # OBSERVATIONAL, and the strongest check here. Everything above is
+    # declarative -- it reasons about files. This asks a harness what it
+    # ACTUALLY loaded.
+    #
+    # `codex debug prompt-input` renders the model-visible prompt as JSON with
+    # NO API call and no credentials, so the skills listing is ground truth
+    # rather than inference.
+    #
+    # It covers a DIFFERENT failure class from the layout check above. Layout
+    # catches a file in the wrong shape; this catches a file in the RIGHT shape
+    # that still does not load -- unreadable frontmatter, a harness trust gate,
+    # a name collision -- and it is the only way to see the listing BUDGET,
+    # where every description degrades at once while every skill still appears
+    # present.
+    #
+    # Codex is the only one of the three that can answer this for free.
+    # `claude -p` and `pi -p` both cost an API call, so their half stays
+    # declarative above.
+    - if: steps.detect.outputs.skills == 'true'
+      shell: bash
+      run: npm install -g @openai/codex@${{ inputs.codex-version }} >/dev/null 2>&1
+
+    - if: steps.detect.outputs.skills == 'true'
+      shell: bash
+      working-directory: ${{ inputs.root }}
+      run: |
+        set -euo pipefail
+        CODEX_HOME="$(mktemp -d)"; export CODEX_HOME
+        trap 'rm -rf "$CODEX_HOME"' EXIT
+        codex debug prompt-input "hi" > /tmp/codex-prompt.json
+
+        python3 - <<'PY'
+        import json, os, re, sys, pathlib
+        raw = pathlib.Path('/tmp/codex-prompt.json').read_text(errors='replace')
+        blob = ''.join(re.findall(r'<skills_instructions>.*?</skills_instructions>', raw, re.S))
+        if not blob:
+            print('::error::codex rendered no skills section — cannot verify what it loaded')
+            sys.exit(1)
+
+        loaded = {}
+        for name, desc, path in re.findall(r'\\n- ([a-z0-9:_-]+): (.*?) \(file: ([^)]+)\)', blob):
+            loaded[name.split(':')[-1]] = (desc, path)
+
+        expected = set()
+        for d in ('.agents/skills', 'skills'):
+            base = pathlib.Path(d)
+            if base.is_dir():
+                expected |= {p.parent.name for p in base.glob('*/SKILL.md')}
+
+        missing = sorted(expected - set(loaded))
+        if missing:
+            print('::error::Codex did not load: ' + ', '.join(missing))
+            print('These exist on disk as <name>/SKILL.md but are absent from the '
+                  'model-visible listing — the exact silent failure this gate exists for.')
+            sys.exit(1)
+
+        # The listing is byte-budgeted: past the cap Codex truncates EVERY
+        # description rather than dropping a skill, so the discovery mechanism
+        # degrades catalogue-wide while every skill still appears present.
+        truncated = [n for n, (d, _) in loaded.items() if d.rstrip().endswith(('...', '…'))]
+        if truncated:
+            print(f'::warning::Codex truncated {len(truncated)} description(s) — '
+                  f'the listing is over budget: {", ".join(sorted(truncated)[:5])}')
+
+        print(f'codex loaded all {len(expected)} skill(s) from disk')
+        PY
