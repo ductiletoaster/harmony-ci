@@ -46,7 +46,7 @@ Env-independent scanners; each is **blocking** on a greened repo (fails only on
 
 | Action | What | Config source |
 |--------|------|---------------|
-| `actions/gitleaks` | secret scan (full tree; caller checks out `fetch-depth: 0`) | — |
+| `actions/gitleaks` | secret scan over git history; **asserts history depth** — see below | — |
 | `actions/semgrep` | SAST | baked ruleset `/opt/semgrep/harmony-baseline.yaml` |
 | `actions/ruff` | Python lint + format (auto-detected) | caller's `pyproject.toml` |
 | `actions/osv-scanner` | dependency CVEs (offline baked DB); **asserts coverage** — see below | caller's lockfiles + `osv-scanner.toml` |
@@ -56,6 +56,39 @@ Env-independent scanners; each is **blocking** on a greened repo (fails only on
 
 The scanners above are **env-independent** — they run baked tools on the runner
 and never need your dependencies installed.
+
+### gitleaks: the checkout depth is asserted, not assumed
+
+gitleaks scans **commits**, not the working tree, so the checkout's history
+depth *is* this gate's coverage. `actions/checkout` defaults to
+**`fetch-depth: 1`**, which means a caller who forgets the `with:` block gets a
+secret scan of the tip commit and a green check. Measured on a repo with a
+`ghp_…` token in an older commit and a clean tip:
+
+| Checkout | Commits scanned | gitleaks alone |
+|---|---:|---|
+| `fetch-depth: 0` | 5 | `leaks found: 1`, exit **1** |
+| default (depth 1) | 1 | `no leaks found`, exit **0** |
+
+`actions/gitleaks` refuses to report success from a clone whose history it did
+not see. It checks `git rev-parse --is-shallow-repository` before scanning, and
+prints the number of commits actually scanned to the job summary on **every**
+run, pass or fail. Two degenerate cases fail the same way: a non-git directory
+and a HEAD with zero commits — gitleaks reports both as `no leaks found`, exit 0.
+
+| Input | Default | What it does |
+|---|---|---|
+| `on-shallow` | `fail` | Stop on a shallow checkout, naming the one-line fix. Fail-closed. |
+| | `deepen` | Run `git fetch --unshallow` here, then **re-assert** — a fetch that did not actually deepen still fails the gate. |
+| | `allow` | Scan the shallow clone anyway and say loudly, in the log and the summary, how few commits that covered. An explicit, reviewable statement that this gate is not scanning history in this repo. |
+
+`fail` is the default rather than `deepen` because the misconfiguration belongs
+in the caller's workflow, where one line fixes it once for every job, rather
+than being re-paid as a full-history fetch on every run of this action.
+
+The scan runs with `--exit-code 2`, so "leaks found" and "gitleaks itself died"
+(a bad config or an unreadable source — both exit **1** by default) can no
+longer be reported as the same thing.
 
 ### osv-scanner: coverage is asserted, not assumed
 

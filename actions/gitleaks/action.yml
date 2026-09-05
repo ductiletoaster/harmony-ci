@@ -1,11 +1,231 @@
 ---
 name: gitleaks (secret scan)
 description: >
-  Secret scan across the full working tree using the baked gitleaks. BLOCKING.
-  The caller must have checked out the repo with fetch-depth: 0 so history is
-  scanned, not just the tip. Requires a harmony-arc-runner (gitleaks on PATH).
+  Secret scan over the repository's git HISTORY using the baked gitleaks.
+  BLOCKING, and it ASSERTS COVERAGE: gitleaks scans commits, so a shallow
+  checkout silently reduces the scan to the tip commit and still reports
+  green — and actions/checkout's DEFAULT is fetch-depth: 1. This action refuses
+  to report success from a clone whose history it did not see, and refuses to
+  report success from a scan that covered zero commits. Check out with
+  fetch-depth: 0, or opt in to on-shallow: deepen / allow. Commits scanned are
+  reported to the job summary on EVERY run. Requires a harmony-arc-runner
+  (gitleaks on PATH).
+inputs:
+  on-shallow:
+    description: >
+      What this gate does when the checkout is a SHALLOW clone.
+      `fail` (default) — stop, naming the one-line fix. Fail-closed: a shallow
+      clone can never produce a green check.
+      `deepen` — run `git fetch --unshallow` and then RE-ASSERT; if the clone is
+      still shallow the gate fails anyway. Friendlier, but it repairs a caller
+      misconfiguration on every run instead of once, needs the checkout's
+      credentials to still be present, and costs a full-history fetch each time.
+      `allow` — scan the shallow clone anyway and say loudly, in the job summary
+      and the log, how few commits that actually covered. An explicit,
+      reviewable statement that this gate is NOT scanning history here.
+    required: false
+    default: fail
 runs:
   using: composite
   steps:
-    - shell: bash
-      run: gitleaks detect --source . --redact --verbose --no-banner
+    # 1. Does the detection primitive this whole action rests on still tell a
+    #    shallow clone from a complete one? Cheap, offline, and it fails the
+    #    gate rather than letting the guard go quietly inert. Deliberately
+    #    asserts OUR mechanism, not gitleaks' behaviour: if gitleaks ever
+    #    learned to flag its own shallow scans, that is a good thing and must
+    #    not turn into a red build here.
+    - name: Selftest — shallow detection
+      shell: bash
+      run: |
+        set -euo pipefail
+        fixture="$(mktemp -d)"
+        trap 'rm -rf "$fixture"' EXIT
+        git init -q "$fixture/src"
+        git -C "$fixture/src" -c user.email=ci@local -c user.name=ci \
+            -c commit.gpgsign=false commit -q --allow-empty -m one
+        git -C "$fixture/src" -c user.email=ci@local -c user.name=ci \
+            -c commit.gpgsign=false commit -q --allow-empty -m two
+        # file:// on purpose: git IGNORES --depth for a plain local path clone
+        # (it hardlinks the object store), so a local-path fixture would be
+        # complete and the selftest would assert nothing.
+        git clone -q "file://$fixture/src" "$fixture/full"
+        git clone -q --depth 1 "file://$fixture/src" "$fixture/shallow"
+        full="$(git -C "$fixture/full" rev-parse --is-shallow-repository)"
+        part="$(git -C "$fixture/shallow" rev-parse --is-shallow-repository)"
+        if [ "$part" != "true" ] || [ "$full" != "false" ]; then
+          echo "::error::selftest: 'git rev-parse --is-shallow-repository' no" \
+               "longer distinguishes a shallow clone (got '$part') from a" \
+               "complete one (got '$full'). The shallow guard in this action is" \
+               "inert, so a depth-1 checkout could again scan one commit and" \
+               "report green."
+          exit 1
+        fi
+        echo "selftest: shallow detection works (shallow=$part, full=$full)."
+
+    # 2. The assertion. gitleaks walks commits, so history depth IS coverage:
+    #    a depth-1 checkout scans the tip and nothing else, and says "no leaks
+    #    found" while every older commit — where leaked credentials actually
+    #    live, having been "removed" in a later commit — goes unexamined.
+    - name: Assert history depth
+      id: depth
+      shell: bash
+      env:
+        ON_SHALLOW: ${{ inputs.on-shallow }}
+      run: |
+        set -euo pipefail
+        summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+        case "$ON_SHALLOW" in
+          fail|deepen|allow) ;;
+          *) echo "::error::on-shallow must be fail, deepen or allow (got '$ON_SHALLOW')."
+             exit 1 ;;
+        esac
+
+        if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null || echo false)" != "true" ]; then
+          echo "### gitleaks coverage — NONE" >> "$summary"
+          echo "Not a git working tree; no history to scan." >> "$summary"
+          echo "::error::not a git working tree. gitleaks scans COMMITS, so" \
+               "there is no history here to scan — and it would exit 0 saying" \
+               "'no leaks found'. Check the repo out before this action."
+          exit 1
+        fi
+
+        shallow="$(git rev-parse --is-shallow-repository)"
+        deepened=false
+
+        if [ "$shallow" = "true" ] && [ "$ON_SHALLOW" = "deepen" ]; then
+          echo "Shallow clone; on-shallow=deepen — fetching full history."
+          err="$(mktemp)"
+          if git fetch --no-tags --unshallow --quiet 2>"$err"; then
+            deepened=true
+          else
+            echo "::warning::git fetch --unshallow failed:"
+            sed 's/^/  /' "$err"
+          fi
+          # Re-assert rather than trust the fetch. A partial or credential-less
+          # unshallow must not hand back a green shallow scan.
+          shallow="$(git rev-parse --is-shallow-repository)"
+        fi
+
+        commits="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
+
+        if [ "$shallow" = "true" ]; then
+          if [ "$ON_SHALLOW" = "allow" ]; then
+            echo "::warning::SHALLOW SECRET SCAN — this gate examined only the" \
+                 "$commits commit(s) present in a depth-limited checkout. The" \
+                 "repository's history was NOT scanned. on-shallow=allow was" \
+                 "set deliberately; unset it and add 'fetch-depth: 0' to your" \
+                 "checkout to restore real coverage."
+          else
+            {
+              echo "### gitleaks coverage — REFUSED"
+              echo
+              echo "Shallow checkout: only **$commits** commit(s) would have been"
+              echo "scanned. Add \`fetch-depth: 0\` to your checkout step."
+            } >> "$summary"
+            echo "::error::SHALLOW CHECKOUT — refusing to report a secret scan" \
+                 "that covered only $commits commit(s). gitleaks scans git" \
+                 "history, and actions/checkout defaults to fetch-depth: 1, so" \
+                 "this scan would have missed every secret that is not in the" \
+                 "tip commit and still exited 0. Fix the caller:"
+            echo "::error::    - uses: actions/checkout@<sha>"
+            echo "::error::        with: { fetch-depth: 0 }"
+            if [ "$ON_SHALLOW" = "deepen" ]; then
+              echo "::error::on-shallow=deepen was set, but the clone is STILL" \
+                   "shallow after 'git fetch --unshallow' (see the warning" \
+                   "above). Deepen the checkout itself instead."
+            else
+              echo "::error::Or set this action's on-shallow input to 'deepen'" \
+                   "(fetch the history here) or 'allow' (accept the reduced" \
+                   "coverage, loudly)."
+            fi
+            exit 1
+          fi
+        fi
+
+        # Zero commits is zero coverage even in a complete clone, and gitleaks
+        # reports it as "0 commits scanned … no leaks found", exit 0 — the same
+        # silent pass one step further along.
+        if [ "$commits" -lt 1 ]; then
+          echo "### gitleaks coverage — NONE" >> "$summary"
+          echo "Zero commits reachable from HEAD; nothing was scanned." >> "$summary"
+          echo "::error::this scan would cover ZERO commits, which gitleaks" \
+               "reports as 'no leaks found' with exit 0. There is nothing here" \
+               "to scan — check the checkout step."
+          exit 1
+        fi
+
+        {
+          echo "shallow=$shallow"
+          echo "deepened=$deepened"
+          echo "commits=$commits"
+        } >> "$GITHUB_OUTPUT"
+        echo "History depth OK: $commits commit(s), shallow=$shallow, deepened=$deepened."
+
+    # 3. The scan. --exit-code 2 is load-bearing: with gitleaks' DEFAULT exit
+    #    code of 1, "leaks found" and "gitleaks itself died" (a bad config, an
+    #    unreadable source — both log FTL and exit 1) are the same number, so a
+    #    tool failure would be reported to the reader as a leak. Moving the
+    #    leak verdict to 2 leaves 1 meaning only "the scanner broke".
+    - name: Scan
+      id: scan
+      shell: bash
+      run: |
+        # +e on purpose: gitleaks' non-zero exit is DATA here, handed to the
+        # verdict step. Under -e this step would die before recording it.
+        set +e
+        set -uo pipefail
+        report="$(mktemp -d)/gitleaks.json"
+        echo "report=$report" >> "$GITHUB_OUTPUT"
+        gitleaks detect --source . --redact --verbose --no-banner \
+          --exit-code 2 --report-format json --report-path "$report"
+        rc=$?
+        echo "rc=$rc" >> "$GITHUB_OUTPUT"
+        echo "gitleaks exited $rc"
+        exit 0
+
+    # 4. The verdict, plus coverage on EVERY run. A gate that only speaks when
+    #    it finds something teaches readers that silence means "clean" — which
+    #    is the assumption this whole change exists to correct.
+    - name: Report coverage and verdict
+      shell: bash
+      env:
+        RC: ${{ steps.scan.outputs.rc }}
+        REPORT: ${{ steps.scan.outputs.report }}
+        COMMITS: ${{ steps.depth.outputs.commits }}
+        SHALLOW: ${{ steps.depth.outputs.shallow }}
+        DEEPENED: ${{ steps.depth.outputs.deepened }}
+      run: |
+        set -uo pipefail
+        summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+        leaks="$(python3 -c "
+        import json, os, sys
+        p = sys.argv[1]
+        try:
+            print(len(json.load(open(p))) if os.path.exists(p) else 'unknown')
+        except Exception:
+            print('unknown')
+        " "$REPORT")"
+
+        depth_note="full history"
+        if [ "$SHALLOW" = "true" ]; then
+          depth_note="**SHALLOW — history NOT scanned**"
+        elif [ "$DEEPENED" = "true" ]; then
+          depth_note="full history (deepened by this action)"
+        fi
+
+        {
+          echo "### gitleaks coverage"
+          echo
+          echo "Scanned **$COMMITS** commit(s) — $depth_note. Leaks: **$leaks**."
+        } | tee -a "$summary"
+
+        case "$RC" in
+          0) echo "No leaks found." ;;
+          2) echo "::error::gitleaks found $leaks leak(s) — see the findings above."
+             exit 1 ;;
+          *) echo "::error::gitleaks itself failed (exit $RC). This is a tool" \
+                  "error, not a clean scan — no coverage was produced."
+             exit 1 ;;
+        esac
