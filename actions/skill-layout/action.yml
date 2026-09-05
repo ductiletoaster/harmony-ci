@@ -1,20 +1,23 @@
 ---
 name: skill layout (agent skills)
 description: >
-  Assert every agent skill sits where its harness actually reads it —
-  <name>/SKILL.md, no flat files, no dangling symlinks, name matching directory.
-  Auto-detected: skips cleanly (not silent-green) when the repo ships no skills.
-  BLOCKING. The rule lives in pixeloven/crew; this is only the plumbing, so
-  there is one definition rather than a copy per repo.
+  Validate agent skills with Claude Code's own `plugin validate`, then assert the
+  layout rules it does not cover — flat files, name/directory mismatch, dangling
+  symlinks. Auto-detected: skips cleanly (not silent-green) when the repo ships
+  no skills. BLOCKING.
 inputs:
   crew-ref:
-    description: pixeloven/crew tag carrying the checker. Pin it; do not track a branch.
+    description: pixeloven/crew tag carrying the layout checker. Pin it; do not track a branch.
     required: false
     default: v0.28.0
   root:
     description: Repository root to check.
     required: false
     default: "."
+  claude-version:
+    description: Version of the Claude Code CLI used for native validation.
+    required: false
+    default: latest
 runs:
   using: composite
   steps:
@@ -22,32 +25,58 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        found=false
+        r='${{ inputs.root }}'
+        skills=false
         for d in .agents/skills .claude/skills skills; do
-          if [ -d "${{ inputs.root }}/$d" ]; then found=true; fi
+          [ -d "$r/$d" ] && skills=true
         done
-        echo "skills=$found" >> "$GITHUB_OUTPUT"
-        if [ "$found" = false ]; then
-          echo "No .agents/skills, .claude/skills or skills/ — skill-layout skipped." \
-            >> "$GITHUB_STEP_SUMMARY"
+        manifest=false
+        for m in .claude-plugin/plugin.json .claude-plugin/marketplace.json; do
+          [ -f "$r/$m" ] && manifest=true
+        done
+        echo "skills=$skills"   >> "$GITHUB_OUTPUT"
+        echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+        if [ "$skills" = false ]; then
+          echo "No .agents/skills, .claude/skills or skills/ — skill-layout skipped." >> "$GITHUB_STEP_SUMMARY"
         fi
 
+    # Claude Code ships its own validator. Prefer it over anything hand-rolled:
+    # it is maintained alongside the runtime that has to read these files, and it
+    # catches manifest and frontmatter faults, plus the symlink rule (plugin
+    # components are read WITHOUT following symlinks) that is easy to get wrong.
+    # It needs no credentials — validation is entirely local.
+    - if: steps.detect.outputs.manifest == 'true'
+      shell: bash
+      run: npm install -g @anthropic-ai/claude-code@${{ inputs.claude-version }} >/dev/null 2>&1
+
+    - if: steps.detect.outputs.manifest == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        claude plugin validate '${{ inputs.root }}' --strict
+        # Component inventory and projected token cost, for the record. A skill
+        # catalogue has a context price and it should be visible in the log
+        # rather than discovered when a session gets slow.
+        name="$(python3 -c "import json,sys;print(json.load(open('${{ inputs.root }}/.claude-plugin/plugin.json'))['name'])" 2>/dev/null || true)"
+        if [ -n "$name" ]; then
+          claude --plugin-dir '${{ inputs.root }}' plugin details "$name" | tee -a "$GITHUB_STEP_SUMMARY"
+        fi
+
+    # What `plugin validate` does NOT cover, verified against it: a flat
+    # `skills/<name>.md` and a `name:` disagreeing with its directory both PASS
+    # `--strict`. Those are the two faults that actually shipped, so they still
+    # need asserting.
     - if: steps.detect.outputs.skills == 'true'
       shell: bash
       env:
         CREW_REF: ${{ inputs.crew-ref }}
       run: |
         set -euo pipefail
-        # Fetched at a pinned tag rather than vendored: a copy per repo is the
-        # drift that produced the defect this gate exists to catch.
         script="$(mktemp)"
         curl -fsSL --retry 3 --retry-all-errors \
           "https://raw.githubusercontent.com/pixeloven/crew/${CREW_REF}/scripts/check_skill_layout.py" \
           -o "$script"
-
-        # Selftest first. A gate that reports green proves nothing until it has
-        # been watched rejecting something -- and a truncated or wrong-version
-        # download would otherwise pass silently.
+        # Selftest first: a truncated or wrong-version download would otherwise
+        # pass silently, which is the failure mode this gate exists for.
         python3 "$script" --selftest
-
-        python3 "$script" "${{ inputs.root }}"
+        python3 "$script" '${{ inputs.root }}'
