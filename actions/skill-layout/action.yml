@@ -18,6 +18,13 @@ inputs:
     description: Version of the Claude Code CLI used for native validation.
     required: false
     default: latest
+  skilllint-version:
+    description: >
+      Version of skilllint (PyPI) — 24 rules for manifests, frontmatter, token
+      budgets and name/directory agreement. Pin it; a linter that changes under
+      you turns a green build red without a commit.
+    required: false
+    default: "1.17.4"
   codex-version:
     description: Version of the Codex CLI used for the observational check.
     required: false
@@ -66,10 +73,57 @@ runs:
           claude --plugin-dir '${{ inputs.root }}' plugin details "$name" | tee -a "$GITHUB_STEP_SUMMARY"
         fi
 
-    # What `plugin validate` does NOT cover, verified against it: a flat
-    # `skills/<name>.md` and a `name:` disagreeing with its directory both PASS
-    # `--strict`. Those are the two faults that actually shipped, so they still
-    # need asserting.
+    # skilllint (MIT, bitflight-devops) — 24 rules. Adopted rather than
+    # reimplemented: it covers name/directory agreement, description length,
+    # REAL token budgets via tiktoken, plugin/marketplace manifests, and
+    # description trigger-phrase quality. Everything below it is what remains.
+    #
+    # Scoped with --filter: unscoped it judges pi's agent files by Claude Code's
+    # agent schema and emits two false ERRORS on a healthy repo.
+    - if: steps.detect.outputs.skills == 'true'
+      shell: bash
+      working-directory: ${{ inputs.root }}
+      run: |
+        set -euo pipefail
+        pipx install "skilllint==${{ inputs.skilllint-version }}" >/dev/null 2>&1 \
+          || pip install --quiet "skilllint==${{ inputs.skilllint-version }}"
+
+        # MUST run from the repo root. Pointed at a bare skills directory it
+        # silently scans NOTHING -- verified by planting a `name:`/directory
+        # mismatch, which the root scan reports and the scoped scan does not.
+        skilllint check . 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | tee /tmp/skilllint.txt
+
+        python3 - <<'PYEOF'
+        import re, pathlib, sys
+        lines = pathlib.Path('/tmp/skilllint.txt').read_text().split('\n')
+        cur, errs, warns, files = None, [], [], set()
+        for ln in lines:
+            m = re.match(r'^\s*(\S+\.md)\s*$', ln)
+            if m:
+                cur = m.group(1); files.add(cur); continue
+            if cur and '\u274c' in ln: errs.append((cur, ln.strip()))
+            if cur and '\u26a0' in ln: warns.append((cur, ln.strip()))
+
+        # A run that inspected nothing is a failure, not a pass.
+        if not files:
+            print('::error::skilllint inspected no files — refusing to report a pass')
+            sys.exit(1)
+
+        # pi agent files are judged by Claude Code's agent schema and emit false
+        # errors on a healthy repo. Excluded from the VERDICT, not from the scan,
+        # and the association is per-file rather than per-line -- a line filter
+        # cannot work here, because the path and the finding are on different lines.
+        blocking = [(f, t) for f, t in errs if '/.pi/agents' not in f and not f.startswith('.pi/agents')]
+        print(f'skilllint: {len(files)} file(s), {len(errs)} error(s), {len(warns)} warning(s)')
+        for f, t in blocking:
+            print(f'::error file={f}::{t}')
+        sys.exit(1 if blocking else 0)
+        PYEOF
+
+    # What NEITHER `plugin validate` NOR skilllint covers -- both verified
+    # against a planted repo: a flat `skills/<name>.md` is silently ignored by
+    # both, and a dangling symlink is invisible to both. Those are the two
+    # faults that actually shipped, so they still need asserting.
     - if: steps.detect.outputs.skills == 'true'
       shell: bash
       env:
