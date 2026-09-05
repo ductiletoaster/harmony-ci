@@ -15,8 +15,9 @@
 #   5. (Optional) If you want these to block merges, mark them required in branch
 #      protection — your call (see GUIDANCE.md).
 #
-# The composite actions below are pinned to a harmony-ci commit SHA — never a
-# floating tag. Bump the SHA however you like (Renovate/Dependabot/by hand).
+# The composite actions below are pinned to an EXACT harmony-ci semver tag —
+# never @main, never a bare major. Bump the version however you like
+# (Renovate/Dependabot/by hand); the release notes say what changed.
 name: CI
 
 on:
@@ -42,7 +43,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: ductiletoaster/harmony-ci/actions/gitleaks@47af013018c07e12803ea3268698cba6a3f3e645 # v1
+      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v1.0.0
 
   semgrep:
     name: semgrep (SAST)
@@ -51,7 +52,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # Uses the baked, tokenless ruleset (/opt/semgrep/harmony-baseline.yaml).
       # This is WHY arc is the recommended path — no SEMGREP_APP_TOKEN needed.
-      - uses: ductiletoaster/harmony-ci/actions/semgrep@47af013018c07e12803ea3268698cba6a3f3e645 # v1
+      - uses: ductiletoaster/harmony-ci/actions/semgrep@v1.0.0
 
   osv-scanner:
     name: osv-scanner (dependency CVEs)
@@ -60,7 +61,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # Reads the offline baked DB (egress-free). Seeded ecosystems:
       # PyPI/npm/Go/Cargo — an unseeded ecosystem needs a runner-image seed entry.
-      - uses: ductiletoaster/harmony-ci/actions/osv-scanner@47af013018c07e12803ea3268698cba6a3f3e645 # v1
+      - uses: ductiletoaster/harmony-ci/actions/osv-scanner@v1.0.0
 
   dependency-review:
     name: dependency-review (PR only)
@@ -91,7 +92,7 @@ jobs:
   #     # The RULE lives in pixeloven/crew, pinned by tag; this action is only
   #     # the plumbing, so there is one definition rather than a copy per repo --
   #     # copies are the drift this gate exists to catch.
-  #     - uses: ductiletoaster/harmony-ci/actions/skill-layout@main
+  #     - uses: ductiletoaster/harmony-ci/actions/skill-layout@v1.0.0
 
   # ── CODE QUALITY (suggested: run inline) ──────────────────────────────────
   # UNCOMMENT the block(s) for YOUR stack. lint+format → typecheck → tests.
@@ -108,13 +109,13 @@ jobs:
   #     # The python-* language-pack actions run YOUR OWN pinned ruff/mypy/pytest
   #     # via `uv run` (uv is baked into harmony-arc-runner) — so CI matches local
   #     # dev exactly. Granular on purpose: drop the type-check, or swap its
-  #     # checker, without touching lint or test. Pin to a harmony-ci SHA that
+  #     # checker, without touching lint or test. Pin to a harmony-ci version that
   #     # includes the python-* actions. (Want parallel jobs + distinct checks?
   #     # Split these three into their own jobs and add each to the aggregator.)
-  #     - uses: ductiletoaster/harmony-ci/actions/python-lint@d4e999f57e3a452f8b334b961e8fe4b546e02255 # main
-  #     - uses: ductiletoaster/harmony-ci/actions/python-typecheck@d4e999f57e3a452f8b334b961e8fe4b546e02255 # main
+  #     - uses: ductiletoaster/harmony-ci/actions/python-lint@v1.0.0
+  #     - uses: ductiletoaster/harmony-ci/actions/python-typecheck@v1.0.0
   #       # with: { type-checker: basedpyright }  # default is mypy (fleet standard)
-  #     - uses: ductiletoaster/harmony-ci/actions/python-test@d4e999f57e3a452f8b334b961e8fe4b546e02255 # main
+  #     - uses: ductiletoaster/harmony-ci/actions/python-test@v1.0.0
 
   # node:
   #   name: node · biome · tsc · test
@@ -153,7 +154,7 @@ jobs:
   #   steps:
   #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
   #     # Or use the baked composite action:
-  #     # ductiletoaster/harmony-ci/actions/hadolint@<sha>
+  #     # ductiletoaster/harmony-ci/actions/hadolint@v1.0.0
   #     - name: hadolint
   #       run: hadolint $(git ls-files '**/Dockerfile' '**/Dockerfile.*' '**/*.dockerfile')
 
