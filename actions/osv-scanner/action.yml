@@ -4,13 +4,231 @@ description: >
   Dependency-CVE scan via the baked osv-scanner against the OFFLINE baked DB
   (egress-free; no osv.dev calls). Reads the CALLER's lockfiles natively
   (uv.lock, requirements.txt, package-lock.json, …). Grandfather accepted residue
-  with a repo-root osv-scanner.toml so it blocks only NEW CVEs. BLOCKING. Seeded
-  ecosystems: PyPI/npm/Go/Cargo — an unseeded ecosystem needs a Dockerfile
-  seed-tree entry. Requires a harmony-arc-runner (osv-scanner + /opt/osv-scanner-db).
+  with a repo-root osv-scanner.toml so it blocks only NEW CVEs. BLOCKING, and it
+  ASSERTS COVERAGE: a scan that examined zero packages fails loudly instead of
+  reporting a clean bill of health. By default it also scans lockfiles excluded
+  by .gitignore, because osv-scanner's directory walk honours .gitignore and a
+  gitignored lockfile otherwise silently zeroes the gate. Seeded ecosystems:
+  PyPI/npm/Go/Cargo — an unseeded ecosystem needs a Dockerfile seed-tree entry.
+  Requires a harmony-arc-runner (osv-scanner + /opt/osv-scanner-db).
+inputs:
+  paths:
+    description: >
+      Whitespace-separated directories to scan recursively. Defaults to the repo
+      root.
+    required: false
+    default: "."
+  lockfiles:
+    description: >
+      Whitespace-separated lockfile paths to scan EXPLICITLY (osv-scanner -L),
+      in ADDITION to the directory walk — run as a separate invocation, because
+      -L and a positional directory cannot be combined, and merged into one
+      coverage report. Use for a lockfile the walk cannot find or does not
+      recognise by name. Usually unnecessary: include-git-ignored already covers
+      the common case of a gitignored lockfile.
+    required: false
+    default: ""
+  include-git-ignored:
+    description: >
+      Scan lockfiles that .gitignore excludes (osv-scanner --no-ignore). Default
+      true. osv-scanner's walk honours .gitignore, so a repo that gitignores its
+      lockfile scans NOTHING with this off. Turning it off is opting back in to
+      that blindness.
+    required: false
+    default: "true"
+  allow-empty:
+    description: >
+      Allow a scan that examined zero packages to pass. Default false. Set true
+      ONLY for a repo with genuinely no dependency manifest — it is an explicit,
+      reviewable statement that this gate provides no coverage here, rather than
+      an empty scan quietly reading as green.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
-    - shell: bash
+    # 1. Does the verdict logic still tell "clean" apart from "scanned nothing"?
+    #    Cheap, offline, and it fails the gate if someone later loosens the rule
+    #    this action exists to enforce.
+    - name: Selftest — verdict logic
+      shell: bash
+      run: python3 "${{ github.action_path }}/osv_coverage.py" --selftest
+
+    # 2. Does the scanner, as configured RIGHT HERE, actually reach a gitignored
+    #    lockfile? Everything else in this action reasons about a report; this
+    #    asks the real binary against a real .gitignore. It is the check that
+    #    survives osv-scanner renaming a flag or changing its walk semantics --
+    #    a declarative assertion would keep passing while coverage went to zero.
+    - name: Selftest — gitignored lockfiles are reachable
+      shell: bash
+      env:
+        # Same DB as the real scan below. The selftest asserts EXTRACTION, which
+        # happens regardless of the DB, but pointing both at the same place
+        # keeps the selftest a faithful rehearsal of the real invocation.
+        OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY: /opt/osv-scanner-db
+        INCLUDE_GIT_IGNORED: ${{ inputs.include-git-ignored }}
+      run: |
+        set -euo pipefail
+        fixture="$(mktemp -d)"
+        trap 'rm -rf "$fixture"' EXIT
+        printf 'uv.lock\n' > "$fixture/.gitignore"
+        cat > "$fixture/uv.lock" <<'LOCK'
+        version = 1
+        requires-python = ">=3.11"
+
+        [[package]]
+        name = "six"
+        version = "1.17.0"
+        source = { registry = "https://pypi.org/simple" }
+        LOCK
+
+        args=(scan --offline --format json --all-packages
+              --output "$fixture/probe.json" --recursive)
+        # `[ x ] && arr+=(y)` would ABORT this step under `shell: bash` (which
+        # runs with -e) whenever the test is false. Use a real if.
+        if [ "$INCLUDE_GIT_IGNORED" = "true" ]; then
+          args+=(--no-ignore)
+        fi
+        osv-scanner "${args[@]}" "$fixture" >/dev/null 2>&1 || true
+
+        found=$(python3 -c "
+        import json, os, sys
+        p = sys.argv[1]
+        d = json.load(open(p)) if os.path.exists(p) else {'results': []}
+        print(sum(len(r.get('packages') or []) for r in d.get('results') or []))
+        " "$fixture/probe.json")
+
+        # six 1.17.0 has no CVEs, so this asserts EXTRACTION only and stays
+        # correct whatever vintage the baked DB is.
+        if [ "$INCLUDE_GIT_IGNORED" = "true" ]; then
+          if [ "$found" -lt 1 ]; then
+            echo "::error::selftest: include-git-ignored is true but a gitignored" \
+                 "lockfile was still not scanned. osv-scanner's --no-ignore is not" \
+                 "doing what this action depends on; the gate cannot be trusted."
+            exit 1
+          fi
+          echo "selftest: gitignored lockfile reached ($found package(s))."
+        else
+          if [ "$found" -ne 0 ]; then
+            echo "::error::selftest: include-git-ignored is false yet a gitignored" \
+                 "lockfile WAS scanned — the walk no longer honours .gitignore, so" \
+                 "this input no longer means what it says."
+            exit 1
+          fi
+          echo "selftest: gitignore honoured as configured (0 packages)."
+        fi
+
+    # 3. The real scan. --all-packages is load-bearing: WITHOUT it osv-scanner's
+    #    JSON is `{"results": []}` both for a clean lockfile and for a scan that
+    #    examined nothing, so coverage would be unmeasurable. Never pass
+    #    --allow-no-lockfiles: it prints "No package sources found / No issues
+    #    found" and exits 0, which is precisely the silent pass being fixed.
+    - name: Scan
+      id: scan
+      shell: bash
       env:
         OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY: /opt/osv-scanner-db
-      run: osv-scanner scan --offline --recursive .
+        PATHS: ${{ inputs.paths }}
+        LOCKFILES: ${{ inputs.lockfiles }}
+        INCLUDE_GIT_IGNORED: ${{ inputs.include-git-ignored }}
+      run: |
+        # +e on purpose: a non-zero osv-scanner exit is DATA here (1 = vulns,
+        # 128 = no sources) and is handed to the verdict step. Without +e the
+        # step would die before recording it.
+        set +e
+        set -uo pipefail
+
+        walk_json="$RUNNER_TEMP/osv-walk.json"
+        lock_json="$RUNNER_TEMP/osv-lockfiles.json"
+        echo "walk_results=$walk_json" >> "$GITHUB_OUTPUT"
+        echo "lock_results=$lock_json" >> "$GITHUB_OUTPUT"
+
+        base=(scan --offline --format json --all-packages)
+        empty=1     # every scan we actually ran reported "no package sources"
+        toolerr=0   # first exit code that is neither a result nor "nothing found"
+
+        record() {
+          # 0 = clean, 1 = vulns, 128 = no sources. Anything else is the tool
+          # itself failing, which must never be mistaken for a scan result.
+          case "$1" in
+            128) ;;
+            0|1) empty=0 ;;
+            *)   empty=0; [ "$toolerr" = "0" ] && toolerr="$1" ;;
+          esac
+        }
+
+        # (a) The directory walk.
+        if [ -n "${PATHS// /}" ]; then
+          args=("${base[@]}" --output "$walk_json")
+          if [ "$INCLUDE_GIT_IGNORED" = "true" ]; then
+            args+=(--no-ignore)
+          fi
+          args+=(--recursive)
+          for p in $PATHS; do args+=("$p"); done
+          echo "osv-scanner ${args[*]}"
+          osv-scanner "${args[@]}"
+          rc=$?
+          echo "  exited $rc"
+          record "$rc"
+        fi
+
+        # (b) Explicitly named lockfiles, as a SEPARATE invocation. --lockfile
+        #     and a positional directory cannot be combined: osv-scanner 2.3.1
+        #     then exits 127 with "could not determine extractor suitable to this
+        #     file". Verified against 2.3.1; the two scans are merged downstream.
+        if [ -n "${LOCKFILES// /}" ]; then
+          args=("${base[@]}" --output "$lock_json")
+          for lf in $LOCKFILES; do args+=(--lockfile "$lf"); done
+          echo "osv-scanner ${args[*]}"
+          osv-scanner "${args[@]}"
+          rc=$?
+          echo "  exited $rc"
+          record "$rc"
+        fi
+
+        echo "rc=$toolerr" >> "$GITHUB_OUTPUT"
+
+        # Diagnostic, only on the empty path so it costs nothing in steady
+        # state: if nothing was found while .gitignore was being honoured, say
+        # whether ignoring it would have found something. That turns "No package
+        # sources found" into a message that names the fix.
+        probe=0
+        if [ "$empty" = "1" ] && [ "$INCLUDE_GIT_IGNORED" != "true" ]; then
+          probe_json="$RUNNER_TEMP/osv-probe.json"
+          osv-scanner "${base[@]}" --output "$probe_json" --no-ignore \
+            --recursive $PATHS >/dev/null 2>&1
+          probe=$(python3 -c "
+        import json, os, sys
+        p = sys.argv[1]
+        d = json.load(open(p)) if os.path.exists(p) else {'results': []}
+        print(len(d.get('results') or []))
+        " "$probe_json")
+        fi
+        echo "probe=$probe" >> "$GITHUB_OUTPUT"
+        exit 0
+
+    # 4. The verdict. Coverage is reported on every run, pass or fail, so
+    #    "what did this gate actually look at" is visible without digging.
+    - name: Assert coverage and report
+      shell: bash
+      env:
+        WALK_RESULTS: ${{ steps.scan.outputs.walk_results }}
+        LOCK_RESULTS: ${{ steps.scan.outputs.lock_results }}
+        SCANNER_EXIT: ${{ steps.scan.outputs.rc }}
+        PROBE_HITS: ${{ steps.scan.outputs.probe }}
+        ALLOW_EMPTY: ${{ inputs.allow-empty }}
+        INCLUDE_GIT_IGNORED: ${{ inputs.include-git-ignored }}
+      run: |
+        set -uo pipefail
+        args=(--results "$WALK_RESULTS" --results "$LOCK_RESULTS"
+              --scanner-exit "${SCANNER_EXIT:-0}" --probe-hits "${PROBE_HITS:-0}")
+        # if-blocks, not `[ x ] && …`: the && form returns non-zero when the
+        # test is false, which under -e would fail the gate for the wrong reason.
+        if [ "$ALLOW_EMPTY" = "true" ]; then
+          args+=(--allow-empty)
+        fi
+        if [ "$INCLUDE_GIT_IGNORED" = "true" ]; then
+          args+=(--include-git-ignored)
+        fi
+        # This exit code IS the gate's verdict.
+        python3 "${{ github.action_path }}/osv_coverage.py" "${args[@]}"

@@ -49,13 +49,39 @@ Env-independent scanners; each is **blocking** on a greened repo (fails only on
 | `actions/gitleaks` | secret scan (full tree; caller checks out `fetch-depth: 0`) | — |
 | `actions/semgrep` | SAST | baked ruleset `/opt/semgrep/harmony-baseline.yaml` |
 | `actions/ruff` | Python lint + format (auto-detected) | caller's `pyproject.toml` |
-| `actions/osv-scanner` | dependency CVEs (offline baked DB) | caller's lockfiles + `osv-scanner.toml` |
+| `actions/osv-scanner` | dependency CVEs (offline baked DB); **asserts coverage** — see below | caller's lockfiles + `osv-scanner.toml` |
 | `actions/tflint` | Terraform lint (auto-detected) | caller's `.tflint.hcl` |
 | `actions/hadolint` | Dockerfile lint (auto-detected) | caller's `.hadolint.yaml` |
 | `actions/skill-layout` | agent skills sit where their harness reads them — flat files, dangling symlinks, name/dir mismatch (auto-detected) | rule pinned from `pixeloven/crew` |
 
 The scanners above are **env-independent** — they run baked tools on the runner
 and never need your dependencies installed.
+
+### osv-scanner: coverage is asserted, not assumed
+
+A dependency-CVE gate that examines **zero packages** reports the same green
+check as one that examined everything and found nothing. `actions/osv-scanner`
+refuses to do that: it scans with `--all-packages`, counts what was actually
+examined, prints that count to the job summary on **every** run, and **fails** if
+it comes to zero.
+
+The concrete trap this closes: osv-scanner's directory walk **honours
+`.gitignore`**, so a repo that gitignores `uv.lock` scans nothing at all —
+`0 Extract calls`, "No package sources found". Worse, if such a repo also has any
+*other* extractable file, the run exits **0 with real vulnerabilities
+unexamined**, and nothing anywhere says so. Generating the lockfile in CI first
+does not help; it is skipped for being gitignored, not for being absent.
+
+| Input | Default | What it does |
+|---|---|---|
+| `include-git-ignored` | `true` | Scan lockfiles `.gitignore` excludes. Turning this off opts back in to the blindness above. |
+| `lockfiles` | — | Name lockfiles explicitly (`-L`), for a lockfile the walk can't find. Runs as a separate scan and is merged in. |
+| `paths` | `.` | Directories to walk. |
+| `allow-empty` | `false` | Let a zero-package scan pass. Only for a repo with genuinely no dependency manifest — an explicit, reviewable statement that this gate covers nothing here. |
+
+The action never passes osv-scanner's `--allow-no-lockfiles`, which prints
+"No package sources found / No issues found" and exits **0** — the silent pass in
+its purest form.
 
 ## Language-pack actions (uv-based, env-dependent)
 
