@@ -7,10 +7,27 @@ description: >
   green — and actions/checkout's DEFAULT is fetch-depth: 1. This action refuses
   to report success from a clone whose history it did not see, and refuses to
   report success from a scan that covered zero commits. Check out with
-  fetch-depth: 0, or opt in to on-shallow: deepen / allow. Commits scanned are
-  reported to the job summary on EVERY run. Requires a harmony-arc-runner
+  fetch-depth: 0, or opt in to on-shallow: deepen / allow. The `scope` input
+  chooses WHICH commits are scanned: `history` (the default, and what every
+  earlier version did) walks every ref the clone holds; `branch` walks only
+  what HEAD reaches. Both the scope that ran AND the number of commits it
+  covered go to the job summary on EVERY run. Requires a harmony-arc-runner
   (gitleaks on PATH).
 inputs:
+  scope:
+    description: >
+      WHICH commits this gate scans.
+      `history` (default) — every commit in the clone, across ALL refs. This is
+      gitleaks' own default walk, unchanged from earlier versions.
+      `branch` — only the commits reachable from HEAD. Worth knowing before you
+      leave this on the default: actions/checkout with fetch-depth: 0 always
+      fetches refs/remotes/origin/*, whatever its `ref:` input says, so under
+      `history` a pull request also scans OTHER contributors' unmerged branches
+      — and a finding on one of those blocks a PR whose author never touched it.
+      `branch` scopes the gate to the branch under review; a repo-wide sweep
+      still belongs somewhere, but on a schedule rather than in a merge gate.
+    required: false
+    default: history
   on-shallow:
     description: >
       What this gate does when the checkout is a SHALLOW clone.
@@ -62,7 +79,92 @@ runs:
         fi
         echo "selftest: shallow detection works (shallow=$part, full=$full)."
 
-    # 2. The assertion. gitleaks walks commits, so history depth IS coverage:
+    # 2. Does `scope: branch` still reach BACK through history, and still stop
+    #    at the branch? Asks the REAL binary against a real fixture, because
+    #    this fails silently in both directions: a --log-opts string git happily
+    #    accepts but that walks only the tip would scan one commit and report
+    #    "no leaks found", while one that still walks --all would keep blocking
+    #    PRs on other people's branches. Those two look identical to any
+    #    declarative assertion, and identical to a passing build. Offline; the
+    #    fixture is built here and never committed.
+    - name: Selftest — branch scope walks history, not other branches
+      shell: bash
+      run: |
+        set -euo pipefail
+        fixture="$(mktemp -d)"
+        trap 'rm -rf "$fixture"' EXIT
+        git init -q "$fixture"
+        git -C "$fixture" config user.email ci@local
+        git -C "$fixture" config user.name ci
+        git -C "$fixture" config commit.gpgsign false
+
+        # Assembled from two pieces at runtime so no scannable token literal is
+        # ever committed to THIS repo — harmony-ci's own secret scan would flag
+        # it, and a probe that has to be allowlisted is a probe nobody trusts.
+        # 36 alphanumerics with no repeat run and no alphabet sequence:
+        # gitleaks' github-pat rule needs Shannon entropy >= 3 and discards
+        # sequential-looking matches, so a tidier string would silently find
+        # nothing and this selftest would assert nothing.
+        probe="gh""p_K7pR2xQ9wL4mZ8vT1nB6yH3jF5sD0gC7aE4u"
+        decoy="gh""p_W3jN8fY5tM1qZ7bV4hD9sK6xG2cL0rP5uA8"
+
+        # Commit 1 carries the probe; commit 2 touches an unrelated file. The
+        # probe therefore appears in NO diff but the first commit's, so a scan
+        # narrowed to the tip finds zero and the assertion below catches it.
+        printf 'token = "%s"\n' "$probe" > "$fixture/old.txt"
+        git -C "$fixture" add -A
+        git -C "$fixture" commit -q -m one
+        printf 'nothing to see here\n' > "$fixture/tip.txt"
+        git -C "$fixture" add -A
+        git -C "$fixture" commit -q -m two
+
+        # A second secret on a branch HEAD does NOT reach, standing in for the
+        # unmerged refs/remotes/origin/* that a fetch-depth: 0 PR checkout drags
+        # in. Finding this one is the PR-blocking behaviour `branch` exists to
+        # avoid, so the assertion below is an equality, not a floor.
+        base="$(git -C "$fixture" rev-parse --abbrev-ref HEAD)"
+        git -C "$fixture" checkout -q -b decoy
+        printf 'token = "%s"\n' "$decoy" > "$fixture/decoy.txt"
+        git -C "$fixture" add -A
+        git -C "$fixture" commit -q -m three
+        git -C "$fixture" checkout -q "$base"
+
+        report="$fixture/probe.json"
+        # The same --log-opts string the scan step builds for scope=branch.
+        gitleaks detect --source "$fixture" --redact --no-banner \
+          --report-format json --report-path "$report" \
+          --log-opts "--full-history --diff-filter=tuxdb HEAD" \
+          >/dev/null 2>&1 || true
+
+        found="$(python3 -c "
+        import json, os, sys
+        p = sys.argv[1]
+        print(len(json.load(open(p))) if os.path.exists(p) else -1)
+        " "$report")"
+        commits="$(git -C "$fixture" rev-list --count HEAD)"
+
+        if [ "$found" -ne 1 ]; then
+          echo "::error::selftest: scope=branch found $found leak(s) in the" \
+               "fixture, expected exactly 1 — the probe in commit 1, and NOT" \
+               "the one on the decoy branch. 0 means the --log-opts string no" \
+               "longer reaches back through history, so scope=branch would" \
+               "scan the tip commit and report green. More than 1 means it" \
+               "still walks other refs, which is the cross-branch blocking" \
+               "this input exists to stop. (-1 means gitleaks wrote no report.)"
+          exit 1
+        fi
+
+        if [ "$commits" -ne 2 ]; then
+          echo "::error::selftest: 'git rev-list --count HEAD' returned" \
+               "$commits on a two-commit fixture. Every coverage number this" \
+               "action reports and asserts on is derived from that command, so" \
+               "the zero-commit guard below can no longer be trusted."
+          exit 1
+        fi
+        echo "selftest: scope=branch found the probe in commit 1 of $commits," \
+             "and did not reach the decoy branch."
+
+    # 3. The assertion. gitleaks walks commits, so history depth IS coverage:
     #    a depth-1 checkout scans the tip and nothing else, and says "no leaks
     #    found" while every older commit — where leaked credentials actually
     #    live, having been "removed" in a later commit — goes unexamined.
@@ -71,6 +173,7 @@ runs:
       shell: bash
       env:
         ON_SHALLOW: ${{ inputs.on-shallow }}
+        SCOPE: ${{ inputs.scope }}
       run: |
         set -euo pipefail
         summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
@@ -78,6 +181,12 @@ runs:
         case "$ON_SHALLOW" in
           fail|deepen|allow) ;;
           *) echo "::error::on-shallow must be fail, deepen or allow (got '$ON_SHALLOW')."
+             exit 1 ;;
+        esac
+
+        case "$SCOPE" in
+          history|branch) ;;
+          *) echo "::error::scope must be history or branch (got '$SCOPE')."
              exit 1 ;;
         esac
 
@@ -155,14 +264,46 @@ runs:
           exit 1
         fi
 
+        # Everything above is deliberately scope-INDEPENDENT. `commits` is what
+        # HEAD reaches, and both guards stay keyed to it under every scope: a
+        # depth-1 checkout truncates what HEAD reaches just as badly as it
+        # truncates the rest, so on-shallow must keep applying to `branch` too.
+        # Exempting it would let the count assertion pass while coverage
+        # silently shrank to one commit.
+        #
+        # What the scope DOES change is the number the summary may honestly
+        # report. `branch` covers exactly the commits HEAD reaches. `history`
+        # is gitleaks' own --all walk, which covers every ref in the clone —
+        # more than HEAD reaches on a PR checkout, which is the whole reason
+        # `branch` exists.
+        if [ "$SCOPE" = "branch" ]; then
+          # gitleaks DROPS its own defaults --full-history, --all AND
+          # --diff-filter=tuxdb the moment --log-opts is non-empty (see
+          # NewGitLogCmdContext in sources/git.go). Only --all is being changed
+          # here, so the other two must be re-stated by hand — otherwise
+          # narrowing which REFS are walked would silently change which DIFF
+          # TYPES are scanned as a side effect, and nothing would say so.
+          # No quotes inside the string: gitleaks splits it on spaces and warns
+          # that quoted elements may not work as expected.
+          logopts="--full-history --diff-filter=tuxdb HEAD"
+          scanned="$commits"
+        else
+          logopts=""
+          scanned="$(git rev-list --count --all 2>/dev/null || echo "$commits")"
+        fi
+
         {
           echo "shallow=$shallow"
           echo "deepened=$deepened"
           echo "commits=$commits"
+          echo "scope=$SCOPE"
+          echo "scanned=$scanned"
+          echo "logopts=$logopts"
         } >> "$GITHUB_OUTPUT"
-        echo "History depth OK: $commits commit(s), shallow=$shallow, deepened=$deepened."
+        echo "History depth OK: $commits commit(s) from HEAD, scope=$SCOPE" \
+             "covering $scanned commit(s), shallow=$shallow, deepened=$deepened."
 
-    # 3. The scan. --exit-code 2 is load-bearing: with gitleaks' DEFAULT exit
+    # 4. The scan. --exit-code 2 is load-bearing: with gitleaks' DEFAULT exit
     #    code of 1, "leaks found" and "gitleaks itself died" (a bad config, an
     #    unreadable source — both log FTL and exit 1) are the same number, so a
     #    tool failure would be reported to the reader as a leak. Moving the
@@ -170,6 +311,8 @@ runs:
     - name: Scan
       id: scan
       shell: bash
+      env:
+        LOG_OPTS: ${{ steps.depth.outputs.logopts }}
       run: |
         # +e on purpose: gitleaks' non-zero exit is DATA here, handed to the
         # verdict step. Under -e this step would die before recording it.
@@ -177,14 +320,22 @@ runs:
         set -uo pipefail
         report="$(mktemp -d)/gitleaks.json"
         echo "report=$report" >> "$GITHUB_OUTPUT"
-        gitleaks detect --source . --redact --verbose --no-banner \
-          --exit-code 2 --report-format json --report-path "$report"
+        args=(detect --source . --redact --verbose --no-banner
+              --exit-code 2 --report-format json --report-path "$report")
+        # EMPTY means scope=history: passing --log-opts "" is NOT the same as
+        # omitting it only because gitleaks tests the string for emptiness — but
+        # omitting it is what keeps `history` byte-identical to every earlier
+        # version, so do that rather than rely on the equivalence.
+        if [ -n "$LOG_OPTS" ]; then
+          args+=(--log-opts "$LOG_OPTS")
+        fi
+        gitleaks "${args[@]}"
         rc=$?
         echo "rc=$rc" >> "$GITHUB_OUTPUT"
         echo "gitleaks exited $rc"
         exit 0
 
-    # 4. The verdict, plus coverage on EVERY run. A gate that only speaks when
+    # 5. The verdict, plus coverage on EVERY run. A gate that only speaks when
     #    it finds something teaches readers that silence means "clean" — which
     #    is the assumption this whole change exists to correct.
     - name: Report coverage and verdict
@@ -192,7 +343,8 @@ runs:
       env:
         RC: ${{ steps.scan.outputs.rc }}
         REPORT: ${{ steps.scan.outputs.report }}
-        COMMITS: ${{ steps.depth.outputs.commits }}
+        SCOPE: ${{ steps.depth.outputs.scope }}
+        SCANNED: ${{ steps.depth.outputs.scanned }}
         SHALLOW: ${{ steps.depth.outputs.shallow }}
         DEEPENED: ${{ steps.depth.outputs.deepened }}
       run: |
@@ -208,17 +360,25 @@ runs:
             print('unknown')
         " "$REPORT")"
 
-        depth_note="full history"
+        # Name the SCOPE, not just a number. This line is the only signal a
+        # reader gets about what was covered, so "full history" under
+        # scope=branch would be a straightforward lie — and a coverage gate
+        # that misreports its own coverage is the failure it exists to prevent.
+        if [ "$SCOPE" = "branch" ]; then
+          depth_note="scope \`branch\`: everything HEAD reaches, nothing on other refs"
+        else
+          depth_note="scope \`history\`: every ref in this clone"
+        fi
         if [ "$SHALLOW" = "true" ]; then
-          depth_note="**SHALLOW — history NOT scanned**"
+          depth_note="$depth_note; **SHALLOW — history NOT scanned**"
         elif [ "$DEEPENED" = "true" ]; then
-          depth_note="full history (deepened by this action)"
+          depth_note="$depth_note (deepened by this action)"
         fi
 
         {
           echo "### gitleaks coverage"
           echo
-          echo "Scanned **$COMMITS** commit(s) — $depth_note. Leaks: **$leaks**."
+          echo "Scanned **$SCANNED** commit(s) — $depth_note. Leaks: **$leaks**."
         } | tee -a "$summary"
 
         case "$RC" in

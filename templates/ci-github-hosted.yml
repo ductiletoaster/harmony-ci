@@ -45,6 +45,12 @@ jobs:
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PIN THE SCANNER, NOT JUST THE ACTION. The SHA above pins a wrapper
+          # around a binary it DOWNLOADS at run time; unset, GITLEAKS_VERSION
+          # means LATEST, so this gate silently re-tools itself every run and an
+          # upstream rule change lands as an unexplained red PR. Bump this
+          # deliberately. Same reasoning, at length, in security-scan.yml.
+          GITLEAKS_VERSION: "8.30.1"
           # GITLEAKS_LICENSE is only required for GitHub *Organizations*. Set it
           # as a repo/org secret if this repo lives under an org account. It is
           # NOT needed for personal-account repos.

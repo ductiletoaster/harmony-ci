@@ -46,7 +46,7 @@ Env-independent scanners; each is **blocking** on a greened repo (fails only on
 
 | Action | What | Config source |
 |--------|------|---------------|
-| `actions/gitleaks` | secret scan over git history; **asserts history depth** — see below | — |
+| `actions/gitleaks` | secret scan over git history; **asserts depth and scope** — see below | — |
 | `actions/semgrep` | SAST | baked ruleset `/opt/semgrep/harmony-baseline.yaml` |
 | `actions/ruff` | Python lint + format (auto-detected) | caller's `pyproject.toml` |
 | `actions/osv-scanner` | dependency CVEs (offline baked DB); **asserts coverage** — see below | caller's lockfiles + `osv-scanner.toml` |
@@ -72,9 +72,10 @@ secret scan of the tip commit and a green check. Measured on a repo with a
 
 `actions/gitleaks` refuses to report success from a clone whose history it did
 not see. It checks `git rev-parse --is-shallow-repository` before scanning, and
-prints the number of commits actually scanned to the job summary on **every**
-run, pass or fail. Two degenerate cases fail the same way: a non-git directory
-and a HEAD with zero commits — gitleaks reports both as `no leaks found`, exit 0.
+prints **which scope ran and how many commits that covered** to the job summary
+on **every** run, pass or fail. Two degenerate cases fail the same way: a
+non-git directory and a HEAD with zero commits — gitleaks reports both as
+`no leaks found`, exit 0.
 
 | Input | Default | What it does |
 |---|---|---|
@@ -89,6 +90,39 @@ than being re-paid as a full-history fetch on every run of this action.
 The scan runs with `--exit-code 2`, so "leaks found" and "gitleaks itself died"
 (a bad config or an unreadable source — both exit **1** by default) can no
 longer be reported as the same thing.
+
+`on-shallow` applies under **every** scope, `branch` included. A depth-1
+checkout truncates what `HEAD` reaches too, so exempting `branch` would let the
+commit count pass while coverage silently shrank to the tip.
+
+### gitleaks: which commits, not just how many
+
+Depth is one half of coverage; **which refs** is the other. With no `--log-opts`
+gitleaks walks `git log --all`, and `actions/checkout` with `fetch-depth: 0`
+always fetches `+refs/heads/*:refs/remotes/origin/*` regardless of its `ref:`
+input. So on a pull request the default scope also scans every **other**
+unmerged branch in the repo — observed consequence: a PR blocked by two findings
+on a branch its author had never touched.
+
+| Input | Default | What it does |
+|---|---|---|
+| `scope` | `history` | Every commit in the clone, across all refs — gitleaks' own default walk. Unchanged from v2.0.0. |
+| | `branch` | Only the commits reachable from `HEAD`: the branch under review, back through its full history. |
+
+`history` stays the default because narrowing a security gate should be a
+decision someone makes, not something an upgrade does to them. Choose `branch`
+for a per-PR merge gate, where a finding must be about the change under review;
+keep a repo-wide sweep, but on a schedule (`templates/security-scan.yml`) where
+it can't block an unrelated merge.
+
+One non-obvious mechanic, recorded because it is expensive to re-derive:
+gitleaks drops its own `--full-history`, `--all` **and** `--diff-filter=tuxdb`
+the moment `--log-opts` is non-empty. `branch` therefore re-states
+`--full-history` and `--diff-filter=tuxdb` explicitly — otherwise changing which
+*refs* are walked would silently change which *diff types* are scanned as a side
+effect. A selftest step asserts both directions of this against the real binary
+on every run: that `branch` still reaches back past the tip commit, and that it
+still stops at the branch.
 
 ### osv-scanner: coverage is asserted, not assumed
 
