@@ -24,6 +24,15 @@ on:
 permissions:
   contents: write  # create the tag and the GitHub Release
 
+# One release job at a time. Two merges landing close together would otherwise
+# both read VERSION, both find no tag, and race to create one — and the loser
+# fails on a push that looks like an unrelated git error. cancel-in-progress is
+# deliberately FALSE: a cancelled run could have pushed the tag and not yet
+# created the Release, leaving a version consumers can pin with nothing to read.
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+
 jobs:
   tag:
     name: Tag VERSION
@@ -52,6 +61,34 @@ jobs:
           if git rev-parse -q --verify "refs/tags/v$ver" >/dev/null; then
             echo "v$ver is already tagged — bump VERSION to cut a release."
             exit 0
+          fi
+
+          # Strictly GREATER than everything already released. Branches merge in
+          # whatever order review finishes, not in version order: a 2.2.0 bump
+          # merging AFTER a 3.0.0 bump would tag v2.2.0 on a tree that already
+          # contains the 3.0.0 breaking gate, and a consumer taking what looks
+          # like a MINOR would get widened detection with no warning. A tag is
+          # immutable once consumers pin it, so this refuses rather than warns.
+          # The fix is to bump VERSION again on top, not to re-run this.
+          # (fetch-depth: 0 above is what makes the tag list complete here.)
+          highest="$(git tag --list 'v*' \
+            | sed -n 's/^v\([0-9]\{1,\}\.[0-9]\{1,\}\.[0-9]\{1,\}\)$/\1/p' \
+            | sort -V | tail -n1)"
+          if [ -n "$highest" ]; then
+            newest="$(printf '%s\n%s\n' "$highest" "$ver" | sort -V | tail -n1)"
+            # STRICTLY greater, so the equal case is refused here too. The
+            # already-tagged check above catches equality first today, which
+            # makes this arm unreachable — say it anyway, because a guard that
+            # depends on another step running first is one reorder away from
+            # being wrong, and `sort -V | tail -n1` reports a tie as a pass.
+            if [ "$ver" = "$highest" ] || [ "$newest" != "$ver" ]; then
+              echo "::error file=VERSION::VERSION is $ver but v$highest is already" \
+                   "released, so tagging this would publish a version AT OR BELOW" \
+                   "one consumers can already pin — and this tree contains" \
+                   "whatever v$highest shipped. Bump VERSION above $highest and" \
+                   "merge again."
+              exit 1
+            fi
           fi
 
           git config user.name "github-actions[bot]"

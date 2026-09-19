@@ -1,15 +1,21 @@
 # harmony-ci
 
-Public **CI action library** for the Harmony platform and its consumers
-(Harmony, FireRisk, …). A set of **composite actions** — one per gate — that you
-compose into **your own** workflow. There is deliberately **no shared reusable
-workflow**: each project owns its CI workflow, so it controls which gates run,
-their order, and any project-specific steps, and the whole pipeline is visible in
-that project's own repo.
+Public **CI action library** — a set of **composite actions**, one per gate, that
+you compose into **your own** workflow. It runs on `ubuntu-latest` like anything
+else; a self-hosted runner pool is an optimization here, not a requirement.
 
-Repos under different GitHub owners can use these (GitHub can't share a *private*
-reusable workflow across owners, and composable public actions are the clearer
-mechanism anyway).
+Two audiences, deliberately: the private Harmony fleet this was built for and is
+dogfooded by, and any public repo that wants the same gates without a cluster
+behind it. Where those diverge — a tool that has to be baked, a ruleset that is
+private — each action's **Runner needs** column says so, rather than the README
+claiming one runner for all of them.
+
+There is deliberately **no shared reusable workflow**: each project owns its CI
+workflow, so it controls which gates run, their order, and any project-specific
+steps, and the whole pipeline is visible in that project's own repo. Repos under
+different GitHub owners can use these (GitHub can't share a *private* reusable
+workflow across owners, and composable public actions are the clearer mechanism
+anyway).
 
 ## Guidance & convenient templates
 
@@ -22,9 +28,15 @@ take what fits, delete the rest:
   tiers), sensible defaults and why, a getting-started walkthrough, runner notes,
   optional branch protection, and prek coexistence. Nothing in it is required.
 - **[templates/](templates/)** — ready-to-copy workflows (a cookbook, not a form):
-  - `ci-arc.yml` — inline CI on a harmony-arc-runner (baked, tokenless floor).
-  - `ci-github-hosted.yml` — the same floor on `ubuntu-latest`, no baked image
-    (for repos without ARC access).
+  - `ci-github-hosted.yml` — the floor on `ubuntu-latest`, no baked image. The
+    default starting point, and the one that needs nothing you don't already
+    have. It sources its gates from **public marketplace actions**, so it gives
+    you the same *tools* as the library — and none of the coverage assertions
+    below, which live in `actions/*`. Swap any job for the matching action once
+    you have put its tool on PATH.
+  - `ci-arc.yml` — the same tools on a self-hosted ARC pool, wired through this
+    library's `actions/*` (so the assertions apply), with the tools and an
+    offline OSV DB baked into the image.
   - `security-scan.yml` — a weekly, non-blocking security sweep that files a
     tracking issue on findings.
 
@@ -34,28 +46,39 @@ guidance is a recommended starting point, not a mandate.
 
 ## What's here (and what isn't)
 
-- **Here (public):** thin composite actions that *invoke* the gates. Nothing else.
-- **NOT here (private):** the gate **tools** and the Semgrep **ruleset** — baked
-  into the private `harmony-arc-runner` image, the real trust root. These actions
-  only run tools already on the runner's PATH.
+- **Here (public):** thin composite actions that *invoke* the gates. Nothing
+  else — no secrets, no tools, no infra specifics.
+- **Not here:** the gate **tools** themselves. An action runs what is already on
+  the runner's PATH, so where that comes from is yours to choose: public
+  marketplace actions and one-line installs on `ubuntu-latest`, or an image you
+  bake. Harmony bakes them into the private `harmony-arc-runner`, which is that
+  fleet's trust root — not a dependency of this library.
 
 ## Actions
 
 Env-independent scanners; each is **blocking** on a greened repo (fails only on
-*new* regressions):
+*new* regressions). **Runner needs** is what has to exist before the action can
+run — the one claim this library makes about your infrastructure:
 
-| Action | What | Config source |
-|--------|------|---------------|
-| `actions/gitleaks` | secret scan over git history; **asserts depth and scope** — see below | — |
-| `actions/semgrep` | SAST | baked ruleset `/opt/semgrep/harmony-baseline.yaml` |
-| `actions/ruff` | Python lint + format (auto-detected) | caller's `pyproject.toml` |
-| `actions/osv-scanner` | dependency CVEs (offline baked DB); **asserts coverage** — see below | caller's lockfiles + `osv-scanner.toml` |
-| `actions/tflint` | Terraform lint (auto-detected) | caller's `.tflint.hcl` |
-| `actions/hadolint` | Dockerfile lint (auto-detected) | caller's `.hadolint.yaml` |
-| `actions/skill-layout` | agent skills sit where their harness reads them — flat files, dangling symlinks, name/dir mismatch (auto-detected) | rule pinned from `pixeloven/crew` |
+| Action | What | Runner needs | Config source |
+|--------|------|--------------|---------------|
+| `actions/gitleaks` | secret scan over git history; **asserts depth and scope** — see below | `gitleaks` on PATH | — |
+| `actions/semgrep` | SAST | `semgrep` on PATH + the baked ruleset | baked `/opt/semgrep/harmony-baseline.yaml` |
+| `actions/ruff` | Python lint + format (auto-detected) | `ruff` on PATH | caller's `pyproject.toml` |
+| `actions/osv-scanner` | dependency CVEs (offline baked DB); **asserts coverage** — see below | `osv-scanner` on PATH **and an offline DB** at `/opt/osv-scanner-db` — in practice a baked image | caller's lockfiles + `osv-scanner.toml` |
+| `actions/tflint` | Terraform lint (auto-detected) | `tflint` on PATH | caller's `.tflint.hcl` |
+| `actions/hadolint` | Dockerfile lint (auto-detected) | `hadolint` on PATH | caller's `.hadolint.yaml` |
+| `actions/skill-layout` | agent skills sit where their harness reads them — flat files, dangling symlinks, name/dir mismatch (auto-detected) | nothing baked, but **egress at job time**: it `npm install -g`s two CLIs, installs skilllint from PyPI and `curl`s the rule | rule pinned from `pixeloven/crew` |
 
-The scanners above are **env-independent** — they run baked tools on the runner
-and never need your dependencies installed.
+The scanners above are **env-independent** — they run a tool that is already on
+the runner and never need *your* dependencies installed. That is a separate
+question from where the tool itself comes from, which is the **Runner needs**
+column: `skill-layout` fetches what it needs at job time, and the rest need
+their binary provided, whether by a baked image or an install step in your
+workflow. `osv-scanner` is the one an install step does **not** satisfy: it
+scans `--offline`, so it needs the vulnerability *database* on disk at
+`/opt/osv-scanner-db` as well as the binary, which in practice means a baked
+image.
 
 ### gitleaks: the checkout depth is asserted, not assumed
 
@@ -157,17 +180,18 @@ tests — can't run as baked scanners, so these run **your own pinned tools** vi
 `uv run`, matching your local dev exactly (no baked-vs-pinned skew). Granular by
 design: adopt each independently — drop the type-check, or swap its checker,
 without touching lint or test. Auto-detected (skip cleanly with no
-`pyproject.toml`). Require **uv on PATH** — baked into `harmony-arc-runner`; on
-github-hosted, run `astral-sh/setup-uv` first. They run the tools from your
+`pyproject.toml`). Require **uv on PATH** — on `ubuntu-latest` run
+`astral-sh/setup-uv` first; a baked image may already have it (Harmony's does).
+They run the tools from your
 **default** dependency group (`[dependency-groups] dev`), which `uv run` installs
 via its implicit sync; a repo that isolates them in a non-default group must
 promote it (`[tool.uv] default-groups`) or `uv run` won't find them.
 
-| Action | What | Runs |
-|--------|------|------|
-| `actions/python-lint` | lint + format | `uv run ruff check .` + `uv run ruff format --check .` |
-| `actions/python-typecheck` | type-check | `uv run <type-checker>` — input `type-checker`, default **mypy** (the fleet standard); override for basedpyright / pyrefly |
-| `actions/python-test` | tests | `uv run pytest` (+ optional `args`) |
+| Action | What | Runner needs | Runs |
+|--------|------|--------------|------|
+| `actions/python-lint` | lint + format | `uv` on PATH | `uv run ruff check .` + `uv run ruff format --check .` |
+| `actions/python-typecheck` | type-check | `uv` on PATH | `uv run <type-checker>` — input `type-checker`, default **mypy**; override for basedpyright / pyrefly |
+| `actions/python-test` | tests | `uv` on PATH | `uv run pytest` (+ optional `args`) |
 
 (`actions/ruff` above is the **baked, env-independent** lint variant for repos
 without uv; `python-lint` uses your uv-pinned ruff for version-consistency with
@@ -175,8 +199,33 @@ the other `uv run` steps. Use whichever fits.)
 
 ## Requirements
 
-Runners built from **`harmony-arc-runner`** (baked tools + rulesets + offline OSV
-DB). The actions assume the repo is already checked out (they don't checkout).
+Only two things are true of every action here: the repo is **already checked
+out** (no action runs `actions/checkout` for you), and the tool it drives is
+already on **PATH**. What that second one costs you per action is the **Runner
+needs** column above.
+
+On `ubuntu-latest`, `skill-layout` works as-is, the uv-based language packs need
+one `astral-sh/setup-uv` step first, and the rest need their binary installed by
+a step in your workflow. `osv-scanner` is the exception: it scans `--offline`,
+so a binary alone is not enough — it also needs a vulnerability database on disk
+at `/opt/osv-scanner-db`, which in practice means a baked image.
+
+On a self-hosted image that bakes the tools — Harmony uses `harmony-arc-runner`
+— the scanner gates are satisfied with no egress and no tokens. Two caveats,
+because "every gate" would be too strong. The language packs still resolve
+**your** dependencies, so they reach your package index like any `uv sync`. And
+`skill-layout` bakes nothing: it installs the Claude Code and Codex CLIs from
+npm, skilllint from PyPI, and `curl`s its rule from `raw.githubusercontent.com`,
+on every run, on any runner. Its `claude-version` and `codex-version` inputs
+default to `latest` — a floating pin, in a library that tells you not to have
+one. Pin them explicitly until that default changes.
+
+Where the two genuinely differ, it is **not always in the baked image's favour**:
+`actions/osv-scanner` reads an *offline* database baked at image-build time, so
+it is only as fresh as the last image rebuild, while a github-hosted job hitting
+osv.dev sees today's advisories. Neither runner is strictly better; they trade
+egress for freshness in opposite directions, and it is worth knowing which way
+yours leans.
 
 ## Versioning — exact semver, and what a bump means
 
@@ -204,7 +253,7 @@ floating pin wearing a version number, so this repo does not publish one.
 
 These actions run in your CI on runners that hold write-capable tokens, so
 they're a **supply-chain surface**. Pin every `uses:` to an **exact semver tag**
-— `@v2.0.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
+— `@v2.1.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
 
 Why exact semver rather than a SHA: a SHA is immutable but opaque — it carries no
 signal about *what changed*, so every bump is an unreviewable 40-character diff
@@ -224,17 +273,19 @@ permissions:
 jobs:
   gitleaks:
     name: gitleaks (secret scan)
-    runs-on: fire-risk-ci            # your ARC pool label
+    runs-on: ubuntu-latest           # or your self-hosted pool's label
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v2.0.0
+      # On ubuntu-latest, put gitleaks on PATH first (one install step, or the
+      # public gitleaks action). On an image that bakes it, this is the whole job.
+      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v2.1.0
   semgrep:
     name: semgrep (SAST)
-    runs-on: fire-risk-ci
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ductiletoaster/harmony-ci/actions/semgrep@v2.0.0
+      - uses: ductiletoaster/harmony-ci/actions/semgrep@v2.1.0
   # …add ruff / osv-scanner / tflint / hadolint the same way; drop any you don't want.
 ```
 
