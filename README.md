@@ -65,7 +65,7 @@ run — the one claim this library makes about your infrastructure:
 | `actions/gitleaks` | secret scan over git history; **asserts depth and scope** — see below | `gitleaks` on PATH | — |
 | `actions/semgrep` | SAST; **refuses a login-gated ruleset** — see below | `semgrep` on PATH + a ruleset | `config` input, default baked `/opt/semgrep/harmony-baseline.yaml` |
 | `actions/ruff` | Python lint + format (auto-detected) | `ruff` on PATH | caller's `pyproject.toml` |
-| `actions/osv-scanner` | dependency CVEs (offline baked DB); **asserts coverage** — see below | `osv-scanner` on PATH **and an offline DB** at `/opt/osv-scanner-db` — in practice a baked image | caller's lockfiles + `osv-scanner.toml` |
+| `actions/osv-scanner` | dependency CVEs (offline baked DB); **asserts coverage and freshness** — see below | `osv-scanner` on PATH **and an offline DB** (`db-dir`, default `/opt/osv-scanner-db`) — in practice a baked image | caller's lockfiles + `osv-scanner.toml` |
 | `actions/tflint` | Terraform lint (auto-detected) | `tflint` on PATH | caller's `.tflint.hcl` |
 | `actions/hadolint` | Dockerfile lint (auto-detected) | `hadolint` on PATH | caller's `.hadolint.yaml` |
 | `actions/skill-layout` | agent skills sit where their harness reads them — flat files, dangling symlinks, name/dir mismatch (auto-detected) | nothing baked, but **egress at job time**: it `npm install -g`s two CLIs, installs skilllint from PyPI and `curl`s the rule | rule pinned from `pixeloven/crew` |
@@ -76,9 +76,9 @@ question from where the tool itself comes from, which is the **Runner needs**
 column: `skill-layout` fetches what it needs at job time, and the rest need
 their binary provided, whether by a baked image or an install step in your
 workflow. `osv-scanner` is the one an install step does **not** satisfy: it
-scans `--offline`, so it needs the vulnerability *database* on disk at
-`/opt/osv-scanner-db` as well as the binary, which in practice means a baked
-image.
+scans `--offline`, so it needs the vulnerability *database* on disk as well as
+the binary — `db-dir`, defaulting to `/opt/osv-scanner-db` — which in practice
+means a baked image.
 
 ### gitleaks: the checkout depth is asserted, not assumed
 
@@ -173,6 +173,63 @@ The action never passes osv-scanner's `--allow-no-lockfiles`, which prints
 "No package sources found / No issues found" and exits **0** — the silent pass in
 its purest form.
 
+### osv-scanner: freshness is asserted too, because a stale DB looks clean
+
+Coverage answers *what was scanned*. It does not answer *what it was scanned
+against*. The baked database is offline by design — that is what makes this gate
+egress-free — but it therefore cannot see any advisory published after the
+runner image was built, and a scan against it still exits **0**.
+
+Measured: the same `uv.lock` got opposite verdicts from two gates in the same
+PR. The baked gate passed; a github-hosted job querying osv.dev failed on two
+`anyio` 4.13.0 advisories — one **critical**, a TLS certificate-verification
+bypass — published the day before. The hosted job was right. Nothing in the
+baked gate's output distinguished "no advisories" from "no advisories as of
+whenever that image was built".
+
+So the database's age is measured, printed to the job summary on **every** run,
+and past a threshold the gate **fails**:
+
+| Input | Default | What it does |
+|---|---|---|
+| `db-dir` | `/opt/osv-scanner-db` | The offline database this gate scans against, and the one whose age it measures. An image that bakes the DB elsewhere points this at it — otherwise the age reads as *unknown*, which now fails. |
+| `max-db-age` | `30` | Days. Past this the gate fails, naming the build date and the fix. |
+| | `0` | Turns the freshness check off **entirely**, including an age that cannot be determined at all. The age is still measured and still reported wherever it can be — opting out of the gate is not opting out of knowing. |
+| `allow-stale-db` | `false` | Pass an over-age — or undateable — database as a warning. An explicit, reviewable statement that this gate's CVE freshness is not guaranteed here. |
+
+`allow-stale-db` and `allow-empty` say different things and neither stands in
+for the other: one is about *how current* the answer is, the other about
+*whether anything was examined*. Neither can mask a real finding, and a selftest
+case asserts each of those directions — including the one that caught a real bug
+where `allow-stale-db` short-circuited past the empty-coverage check.
+
+**How the database is dated.** In order:
+
+1. **`<db-dir>/BAKED_AT`** — RFC3339, or a bare `YYYY-MM-DD`. Authoritative,
+   and the contract a runner image should implement: it survives anything that
+   rewrites file mtimes, and it states the date rather than letting the gate
+   infer it.
+2. Otherwise the **oldest baked `all.zip` mtime**, which is what an image build
+   leaves behind today. The *oldest*, not the newest: the image seeds one
+   database per ecosystem (PyPI/npm/Go/Cargo), and layer caching is exactly the
+   mechanism that lets a rebuild refresh some and not others. A gate needs the
+   **lower** bound — otherwise one re-seeded ecosystem vouches for three that
+   rotted. The count and, where they disagree, the span are reported too, so a
+   divergent image is visible rather than merely averaged away.
+3. Otherwise **unknown** — which counts as stale. A cutoff nobody can name is
+   not a cutoff, and "no advisories as of an unknown date" is not a result.
+
+A build date more than **24 hours in the future** also counts as unknown. NTP
+bounds real clock skew to seconds, so anything beyond a day is a marker
+describing a date that has not happened — and a date that has not happened is
+not a vintage. Clamping it to "0 days old" would let a `BAKED_AT` of
+`2099-01-01` report *built 2099-01-01, 0 days old*, pass, and keep passing
+forever past any threshold. Within the 24 hours it is still clamped to 0, so
+ordinary skew cannot turn a working gate red.
+
+An unparseable marker falls back to the mtime rather than collapsing to
+unknown, so a malformed `BAKED_AT` cannot turn a working gate red on its own.
+
 ### semgrep: the ruleset is yours to choose, and it cannot be a registry name
 
 A SAST gate is only as real as the rules it loads. Semgrep's registry configs
@@ -208,7 +265,7 @@ available without running a scan; it is not a claim about coverage.
 # off a baked image: install semgrep, vendor the rules
 - uses: actions/checkout@v4
 - run: uv tool install semgrep
-- uses: ductiletoaster/harmony-ci/actions/semgrep@v2.2.0
+- uses: ductiletoaster/harmony-ci/actions/semgrep@v3.0.0
   with: { config: .semgrep/rules.yml }
 ```
 
@@ -247,7 +304,8 @@ On `ubuntu-latest`, `skill-layout` works as-is, the uv-based language packs need
 one `astral-sh/setup-uv` step first, and the rest need their binary installed by
 a step in your workflow. `osv-scanner` is the exception: it scans `--offline`,
 so a binary alone is not enough — it also needs a vulnerability database on disk
-at `/opt/osv-scanner-db`, which in practice means a baked image.
+at `db-dir` (default `/opt/osv-scanner-db`), which in practice means a baked
+image.
 
 On a self-hosted image that bakes the tools — Harmony uses `harmony-arc-runner`
 — the scanner gates are satisfied with no egress and no tokens. Two caveats,
@@ -263,8 +321,9 @@ Where the two genuinely differ, it is **not always in the baked image's favour**
 `actions/osv-scanner` reads an *offline* database baked at image-build time, so
 it is only as fresh as the last image rebuild, while a github-hosted job hitting
 osv.dev sees today's advisories. Neither runner is strictly better; they trade
-egress for freshness in opposite directions, and it is worth knowing which way
-yours leans.
+egress for freshness in opposite directions. The gate no longer lets you find
+that out the hard way — see
+[osv-scanner: freshness is asserted too](#osv-scanner-freshness-is-asserted-too-because-a-stale-db-looks-clean).
 
 ## Versioning — exact semver, and what a bump means
 
@@ -292,7 +351,7 @@ floating pin wearing a version number, so this repo does not publish one.
 
 These actions run in your CI on runners that hold write-capable tokens, so
 they're a **supply-chain surface**. Pin every `uses:` to an **exact semver tag**
-— `@v2.2.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
+— `@v3.0.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
 
 Why exact semver rather than a SHA: a SHA is immutable but opaque — it carries no
 signal about *what changed*, so every bump is an unreviewable 40-character diff
@@ -318,13 +377,13 @@ jobs:
         with: { fetch-depth: 0 }
       # On ubuntu-latest, put gitleaks on PATH first (one install step, or the
       # public gitleaks action). On an image that bakes it, this is the whole job.
-      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v2.2.0
+      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v3.0.0
   semgrep:
     name: semgrep (SAST)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ductiletoaster/harmony-ci/actions/semgrep@v2.2.0
+      - uses: ductiletoaster/harmony-ci/actions/semgrep@v3.0.0
   # …add ruff / osv-scanner / tflint / hadolint the same way; drop any you don't want.
 ```
 
