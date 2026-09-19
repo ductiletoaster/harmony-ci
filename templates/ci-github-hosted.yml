@@ -112,15 +112,18 @@ jobs:
         with:
           fail-on-severity: high
 
-  # ── SAST CAVEAT (semgrep on github-hosted) ────────────────────────────────
-  # On ARC, semgrep uses the baked, tokenless harmony-baseline ruleset. That
-  # ruleset is PRIVATE (baked into the runner image), and Semgrep's registry
-  # rulesets (p/*, `auto`) are LOGIN-GATED → zero findings tokenless. So on
-  # github-hosted, semgrep needs ONE of:
+  # ── SAST CAVEAT (semgrep needs rules from somewhere) ──────────────────────
+  # Semgrep's registry rulesets (p/*, `auto`) are LOGIN-GATED: tokenless they
+  # resolve to ZERO rules, report nothing and exit 0 — a green that means
+  # "nothing was scanned". So semgrep needs ONE of:
   #   (A) a SEMGREP_APP_TOKEN secret (Semgrep Cloud / registry rules), OR
   #   (B) a VENDORED ruleset committed to your repo (e.g. .semgrep/rules.yml).
   # The floor above (gitleaks + osv + dependency-review) works WITHOUT either.
   # Uncomment ONE variant once you've chosen an approach.
+  #
+  # Variant B can use the harmony-ci action rather than a raw command: it takes
+  # a `config:` input, asserts the binary and the ruleset are both really there,
+  # and REFUSES a registry name outright instead of scanning with no rules.
   #
   # semgrep:
   #   name: semgrep (SAST)
@@ -133,7 +136,9 @@ jobs:
   #     #   env:
   #     #     SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
   #     # Variant B — a ruleset you vendor into the repo (no token, no login):
-  #     - run: uvx semgrep scan --config .semgrep/rules.yml --error --metrics=off
+  #     - run: uv tool install semgrep
+  #     - uses: ductiletoaster/harmony-ci/actions/semgrep@v2.2.0
+  #       with: { config: .semgrep/rules.yml }
 
   # agent-skills:
   #   name: skill layout
@@ -148,7 +153,7 @@ jobs:
   #     # The RULE lives in pixeloven/crew, pinned by tag; this action is only
   #     # the plumbing, so there is one definition rather than a copy per repo --
   #     # copies are the drift this gate exists to catch.
-  #     - uses: ductiletoaster/harmony-ci/actions/skill-layout@v2.1.0
+  #     - uses: ductiletoaster/harmony-ci/actions/skill-layout@v2.2.0
 
   # ── CODE QUALITY (suggested: run inline) ──────────────────────────────────
   # UNCOMMENT the block(s) for YOUR stack. lint+format → typecheck → tests.
@@ -166,10 +171,10 @@ jobs:
   #     - uses: astral-sh/setup-uv@v6
   #     # Granular: drop the type-check, or swap its checker, without touching
   #     # lint or test. Pin to a harmony-ci version that ships the python-* actions.
-  #     - uses: ductiletoaster/harmony-ci/actions/python-lint@v2.1.0
-  #     - uses: ductiletoaster/harmony-ci/actions/python-typecheck@v2.1.0
-  #       # with: { type-checker: basedpyright }  # default is mypy (fleet standard)
-  #     - uses: ductiletoaster/harmony-ci/actions/python-test@v2.1.0
+  #     - uses: ductiletoaster/harmony-ci/actions/python-lint@v2.2.0
+  #     - uses: ductiletoaster/harmony-ci/actions/python-typecheck@v2.2.0
+  #       # with: { type-checker: basedpyright }  # default is mypy
+  #     - uses: ductiletoaster/harmony-ci/actions/python-test@v2.2.0
 
   # node:
   #   name: node · biome · tsc · test
