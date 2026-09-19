@@ -36,3 +36,90 @@ jobs:
             exit 1
           fi
           echo "VERSION=$ver"
+      - name: Pinned versions match VERSION
+        # README + templates tell consumers which tag to pin, and nothing kept
+        # them in step with VERSION: v2.1.0 shipped with every example still
+        # pinning @v2.0.0, so a copy-paste consumer got the release BEFORE the
+        # feature they had just read about. Silent, and it re-drifts every time.
+        # Third-party pins (hadolint/hadolint-action@v3.1.0) are theirs to move
+        # and are skipped; a bare `@vX.Y.Z` in prose is one of OUR examples and
+        # must track. On a release PR the pins name a tag that does not exist
+        # until merge — that is how a release lands here, not drift.
+        #
+        # ESCAPE HATCH: a line carrying `<!-- pin-check: ignore -->`, or the
+        # line immediately after one, is exempt. Prose sometimes has to WRITE a
+        # version that is deliberately NOT the current pin — a migration note
+        # across a major ("upgrading from @v2.1.0 to @v3.0.0") names the old tag
+        # on purpose. Without an escape, a MAJOR release could not document its
+        # own upgrade path, which is exactly when a consumer needs one. Keep the
+        # marker rare: every use is a pin that nothing will keep in step with
+        # VERSION again.
+        run: |
+          ver="$(tr -d '[:space:]' < VERSION)"
+          python3 - "$ver" <<'PY'
+          import glob, re, sys
+
+          ver = sys.argv[1]
+          IGNORE = "pin-check: ignore"
+          # The optional leading group is an owner/repo path. Absent means the
+          # pin is a bare `@vX.Y.Z` in prose, which is always one of ours.
+          # The version capture RUNS ON past X.Y.Z so a pre-release or build
+          # suffix is SEEN rather than half-matched: `@v3.0.0-rc1` under a bare
+          # \d+\.\d+\.\d+ pattern captures "3.0.0", compares equal to VERSION
+          # and passes, pinning a tag release.yml will never create. Strictness
+          # is applied below, where it can say so out loud instead of silently
+          # matching the prefix.
+          pat = re.compile(r"(?:([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+))?@v(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)")
+          strict = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+
+          def ours(owner: str) -> bool:
+              # Compare OWNER and REPO as two whole, case-folded segments.
+              # Case-folded because GitHub owners are case-insensitive, so
+              # `DuctileToaster/harmony-ci/...@v2.0.0` is a working stale pin
+              # that a case-sensitive test waves through. Segment-wise because
+              # a `startswith` test also swallows `harmony-ci-contrib`, which
+              # is someone else's repo and someone else's tag to move.
+              if not owner:
+                  return True
+              seg = owner.lower().split("/")
+              if seg[:2] == ["ductiletoaster", "harmony-ci"]:
+                  return True
+              # Repo-relative, no owner: `harmony-ci/actions/ruff@v…` names
+              # THIS repo and drifts exactly like the fully-qualified form.
+              return seg[0] == "harmony-ci"
+
+          files = ["README.md", "GUIDANCE.md"] + sorted(glob.glob("templates/*.yml"))
+          stale = 0
+          for path in files:
+              with open(path, encoding="utf-8") as fh:
+                  exempt_next = False
+                  for num, line in enumerate(fh, 1):
+                      marked = IGNORE in line
+                      exempt, exempt_next = marked or exempt_next, marked
+                      if exempt:
+                          continue
+                      for owner, found in pat.findall(line):
+                          if not ours(owner):
+                              continue
+                          if not strict.fullmatch(found):
+                              print(
+                                  f"::error file={path},line={num}::pins @v{found}, "
+                                  "which is not a strict-semver tag. release.yml "
+                                  "only ever creates vX.Y.Z, so that tag will never "
+                                  f"exist — pin @v{ver}."
+                              )
+                              stale += 1
+                          elif found != ver:
+                              print(
+                                  f"::error file={path},line={num}::pins @v{found} "
+                                  f"but VERSION is {ver} — update it to @v{ver}."
+                              )
+                              stale += 1
+          print(f"checked {len(files)} file(s) against VERSION={ver}: {stale} stale pin(s)")
+          sys.exit(1 if stale else 0)
+          PY
+      - name: osv_coverage selftest
+        # The verdict table this gate rests on is only exercised by the action
+        # itself, i.e. on a CONSUMER's runner. Running it here means a broken
+        # verdict fails on the PR instead of shipping.
+        run: python3 actions/osv-scanner/osv_coverage.py --selftest

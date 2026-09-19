@@ -50,10 +50,10 @@ None of these are requirements — they're the defaults we'd reach for, with why
   review. Gating it is usually worth the friction. For Python, the granular
   **language-pack actions** (`actions/python-lint` · `python-typecheck` ·
   `python-test`) run your own uv-pinned tools so CI matches local dev; adopt each
-  independently. The default type-checker is **mypy** (the fleet standard —
-  lattice + fire-risk-core); override or skip `python-typecheck` if you use
-  basedpyright/pyrefly. This rides on the baked uv in the arc runner — the runner
-  is the tooling; the actions are the convenience.
+  independently. The default type-checker is **mypy** because it is the safest
+  default, not because it is required; override or skip `python-typecheck` if
+  you use basedpyright/pyrefly. All three ride on whatever `uv` the runner has —
+  `astral-sh/setup-uv` on github-hosted, or a baked one.
 - **A security floor** — secret scan (gitleaks), SAST (semgrep), dependency CVEs
   (osv-scanner), PR dependency-review. Rationale: these four catch the common
   supply-chain and secret-leak classes cheaply and deterministically, so they fit
@@ -61,7 +61,7 @@ None of these are requirements — they're the defaults we'd reach for, with why
 - **A scheduled depth sweep** (`security-scan.yml`). Rationale: catches CVEs
   disclosed after your last commit, and heavier scans, without gating PRs.
   Non-blocking by construction — it files an issue.
-- **Pin every `uses:` to an exact semver tag** (`@v2.0.0`) — never `@main`, never
+- **Pin every `uses:` to an exact semver tag** (`@v2.1.0`) — never `@main`, never
   a bare major (`@v1`), never a SHA. Rationale: a workflow runs with a
   write-capable token, so a floating ref is a real supply-chain surface; but a
   SHA over-corrects — it pins without telling you *what changed*, so every bump
@@ -80,12 +80,13 @@ Skip, reorder, or extend any of this to fit your project.
 The templates are a **cookbook**, not a form to fill in. Grab one and make it
 yours:
 
-1. **Pick the template that matches your runner.** Copy `templates/ci-arc.yml`
-   (if you have ARC access) or `templates/ci-github-hosted.yml` (if you don't) to
-   `.github/workflows/ci.yml`.
-2. **Set the runner label.** In `ci-arc.yml`, replace `<YOUR-ARC-LABEL>` with
-   your ARC pool label (`harmony-cluster`, `fire-risk-ci`, `lattice`, …). The
-   github-hosted template already uses `ubuntu-latest`.
+1. **Pick the template that matches your runner.** Copy
+   `templates/ci-github-hosted.yml` to `.github/workflows/ci.yml` — that is the
+   one that needs nothing you don't already have. Use `templates/ci-arc.yml`
+   instead if you have a self-hosted pool whose image bakes the gate tools.
+2. **Set the runner label.** The github-hosted template already says
+   `ubuntu-latest` and needs no edit. In `ci-arc.yml`, replace
+   `<YOUR-ARC-LABEL>` with your own pool's label.
 3. **Turn on the language block(s) you use.** Uncomment the code-quality
    block(s) for your stack (Python / Node / IaC / Docker) and add each to the
    `ci-alls-green` job's `needs:` list. Delete the rest.
@@ -101,14 +102,88 @@ head start, not a contract.
 
 ---
 
-## Runners — arc-first, github-hosted works great too
+## The adoption playbook — gotchas, every one hit for real
 
-We reach for a self-hosted ARC pool built from the private `harmony-arc-runner`
-image first, because it bakes the gate tools, the semgrep ruleset, and an offline
-OSV DB — so the floor is egress-free and tokenless (`ci-arc.yml`). But
-**github-hosted is fully supported** (`ci-github-hosted.yml`) and is often the
-easiest on-ramp: it sources the same floor from public actions on
-`ubuntu-latest`, no baked image needed. Use whichever you have.
+Turning a security floor on for the first time goes wrong in a small number of
+predictable ways. These are the ones that cost us a debugging session each;
+none of them are obvious from the tools' own docs.
+
+- **gitleaks on an organisation-owned repo needs a licence** — the marketplace
+  *action* checks for one and fails without it; the **binary** does not. Either
+  set `GITLEAKS_LICENSE` as a repo/org secret (what `ci-github-hosted.yml`
+  documents), or run the binary directly (what the baked path does). Personal-
+  account repos need neither.
+- **`dependency-review` needs the dependency graph, and on a private repo that
+  means GHAS.** On a public repo, enable the dependency graph first (it also
+  turns on `vulnerability-alerts`) or the action has nothing to compare. On a
+  private repo without Advanced Security, drop the job — it cannot work.
+- **A baked offline OSV database only covers the ecosystems the image seeded.**
+  osv-scanner decides which databases to download from the **lockfiles** it
+  scans at bake time, so a bare `package.json` or `Cargo.toml` seeds nothing —
+  the ecosystem is silently absent, and `--offline` then hard-errors on a real
+  consumer lockfile. Check your image seeds your ecosystem, and keep an online
+  osv run in the scheduled sweep as the backstop.
+- **A fresh floor on an existing repo surfaces its whole backlog at once.**
+  Expect it, and deal with it *before* the gate blocks anyone: one consumer went
+  from 34 findings to 0, which included a `starlette` 0.46→1.3 and `fastapi`
+  0.115→0.140 major bump. Remediate, or baseline the residue in the tool's own
+  config with a tracked issue against it. A gate that is red on day one for
+  reasons nobody caused teaches people to ignore gates.
+- **`pnpm 11` reads `overrides` from `pnpm-workspace.yaml`, not
+  `package.json`.** A transitive-CVE pin placed in the old location is silently
+  ignored, and the CVE stays — with a diff that looks like you fixed it.
+- **On a strict-branch-protected repo, run `gh pr update-branch` before merge.**
+  Otherwise a required check that passed against a stale base blocks the merge
+  with an error that does not mention staleness.
+
+---
+
+## Runners — github-hosted is the baseline, self-hosted is an optimization
+
+**Start on `ubuntu-latest`** (`ci-github-hosted.yml`). It sources the floor from
+public actions, needs no baked image, no cluster and no tokens beyond the ones
+GitHub already gives the job, and it is the configuration anyone can reproduce.
+For most projects this is the end of the decision.
+
+A self-hosted pool (`ci-arc.yml`) buys you something real when you have one:
+Harmony's `harmony-arc-runner` image bakes the gate tools, the semgrep ruleset
+and an offline OSV DB, so the floor makes **no network calls** and needs no
+registry login. That is worth having on a blocking gate, where flaky egress is
+an outage. It is an optimization on top of the baseline, not a prerequisite for
+using this library.
+
+**The trade runs both ways, so know which way yours leans.** Baking buys
+determinism and costs freshness — and the two templates do not source their
+gates from the same place, which is the bigger difference of the two:
+
+| | github-hosted (`ci-github-hosted.yml`) | baked image (`ci-arc.yml`) |
+|---|---|---|
+| where the gates come from | public marketplace actions | this library's `actions/*` |
+| secret scan | `gitleaks/gitleaks-action` — the same binary, none of the assertions | `actions/gitleaks` — shallow-clone refusal, zero-commit guard, `scope`, coverage summary |
+| dependency CVEs | `google/osv-scanner-action` — **online** osv.dev, sees today's advisories; no coverage assertion | `actions/osv-scanner` — **offline** DB, only as fresh as the last image rebuild; coverage and freshness asserted |
+| semgrep | needs a token or a vendored ruleset — see below | `actions/semgrep` + the baked tokenless ruleset |
+| egress at gate time | required | none |
+
+**The hosted template gives you the same tools, not this library's
+assertions.** It sources the floor from public actions, and those actions are
+the plain tools: `gitleaks/gitleaks-action` never asks whether the clone is
+shallow, never refuses a scan that covered zero commits, has no `scope` input
+and prints no coverage line; `google/osv-scanner-action` invoked with
+`--recursive ./` passes neither `--all-packages` nor `--no-ignore`, so a repo
+that gitignores `uv.lock` gets "No package sources found" and a **green check** —
+the silent pass this library exists to stop. The assertions live in `actions/*`,
+which run a tool that is already on PATH rather than installing one, so having
+them on `ubuntu-latest` means an install step first (see the README's **Runner
+needs** column). The template is the quickest floor to stand up, not the
+strongest one, and swapping a job for the matching `actions/*` is a two-line
+change.
+
+The osv row is the one people get backwards. An offline database cannot see an
+advisory published after the image was built, and a scan against it still exits
+**0** — so a green there means "no advisories as of whenever that image was
+built", which is not the same claim as "no advisories". If you run the baked
+path, treat the image's rebuild cadence as part of your CVE coverage, and keep
+an online sweep on a schedule (`security-scan.yml`) to close the gap.
 
 **The semgrep-on-github-hosted caveat.** On ARC, semgrep uses the baked,
 tokenless `harmony-baseline.yaml` ruleset. That ruleset is **private** (baked
@@ -121,9 +196,10 @@ semgrep needs **either**:
 
 The floor on github-hosted **without** either is still solid — **gitleaks +
 osv-scanner + dependency-review** — so the semgrep job ships **commented** in
-`ci-github-hosted.yml` with both options noted. gitleaks and osv-scanner have
-full parity on github-hosted (osv uses the online osv.dev DB instead of the baked
-offline one).
+`ci-github-hosted.yml` with both options noted. Solid, but sourced from the
+public actions: the same three tools, without the coverage assertions, as the
+table above sets out. The one place github-hosted is genuinely *ahead* is CVE
+freshness, because its osv-scanner queries osv.dev rather than a baked snapshot.
 
 ---
 

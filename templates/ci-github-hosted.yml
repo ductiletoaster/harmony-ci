@@ -1,16 +1,31 @@
 ---
-# ci-github-hosted.yml — the SAME security floor on ubuntu-latest, NO baked
-# image (COPY-AND-ADAPT STARTING POINT).
+# ci-github-hosted.yml — the security floor on ubuntu-latest, NO baked image
+# (COPY-AND-ADAPT STARTING POINT).
 #
-# For repos WITHOUT ARC access. Instead of the baked harmony-arc-runner, tools
-# come from public marketplace actions / on-the-fly installs — often the easiest
-# on-ramp. GUIDANCE.md explains the reasoning. Keep what fits, delete the rest.
+# START HERE. This is the default: it needs no self-hosted pool, no baked image
+# and no cluster — tools come from public marketplace actions and on-the-fly
+# installs. GUIDANCE.md explains the reasoning. Keep what fits, delete the rest.
+# ci-arc.yml is the same floor for repos that DO have a pool whose image bakes
+# the tools, which buys egress-free determinism at the cost of DB freshness.
 #
-# ARC vs github-hosted parity (see the SAST caveat below):
-#   gitleaks           ✅ full parity (gitleaks/gitleaks-action)
-#   osv-scanner        ✅ full parity, ONLINE DB (google/osv-scanner-action)
-#   dependency-review  ✅ full parity (actions/dependency-review-action)
-#   semgrep            ⚠️  NEEDS a token OR a vendored ruleset — see below.
+# WHAT THIS TEMPLATE IS NOT. Every gate below is a PUBLIC action, not one of
+# harmony-ci's. You get the same TOOLS; you do not get this library's coverage
+# assertions, which live in actions/* and run a tool that is already on PATH.
+# Concretely, on this template: a shallow checkout is not refused, a zero-commit
+# or zero-PACKAGE scan is not refused, and a gitignored uv.lock scans NOTHING
+# and still reports a green check. Put the tool on PATH first (one install step)
+# and swap `uses:` to ductiletoaster/harmony-ci/actions/<gate> to get them here.
+#
+# github-hosted vs a baked image (see the SAST caveat below):
+#   gitleaks           same binary (gitleaks/gitleaks-action), no depth/scope
+#                      assertion and no coverage summary
+#   osv-scanner        FRESHER here — ONLINE osv.dev (google/osv-scanner-action),
+#                      where a baked offline DB is only as current as its image.
+#                      No --all-packages and no --no-ignore, so coverage is
+#                      unasserted: see the job below.
+#   dependency-review  same (actions/dependency-review-action), needs the
+#                      dependency graph — and GHAS on a private repo
+#   semgrep            NEEDS a token OR a vendored ruleset — see below.
 #
 # TO USE (adapt freely):
 #   1. Copy this file to YOUR repo as .github/workflows/ci.yml
@@ -38,7 +53,10 @@ jobs:
     name: gitleaks (secret scan)
     runs-on: ubuntu-latest
     steps:
-      # gitleaks scans the full history, so fetch-depth: 0 is REQUIRED.
+      # gitleaks scans the full history, so fetch-depth: 0 is REQUIRED — and
+      # nothing below CHECKS that you kept it. The public action scans whatever
+      # clone it is given: drop this `with:` block and the job scans the tip
+      # commit and reports green. actions/gitleaks refuses that clone instead.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
@@ -64,6 +82,13 @@ jobs:
       # Reads the repo's lockfiles natively (uv.lock, requirements.txt,
       # package-lock.json, …). Scans recursively; a non-zero exit blocks the job.
       # To grandfather accepted residue, add a repo-root osv-scanner.toml.
+      # COVERAGE IS NOT ASSERTED HERE. This is the public action, and
+      # `--recursive ./` passes neither --all-packages nor --no-ignore: the
+      # directory walk honours .gitignore, so a repo that gitignores its
+      # lockfile prints "No package sources found" and this job goes GREEN
+      # having examined nothing. ductiletoaster/harmony-ci/actions/osv-scanner
+      # fails that case instead, but wants osv-scanner AND an offline DB on the
+      # runner — which is what the baked image in ci-arc.yml is for.
       # (If you want SARIF in the Security tab, switch to the reusable workflow at
       # google/osv-scanner-action/.github/workflows/osv-scanner-*.yml and grant
       # security-events: write.)
@@ -123,7 +148,7 @@ jobs:
   #     # The RULE lives in pixeloven/crew, pinned by tag; this action is only
   #     # the plumbing, so there is one definition rather than a copy per repo --
   #     # copies are the drift this gate exists to catch.
-  #     - uses: ductiletoaster/harmony-ci/actions/skill-layout@v2.0.0
+  #     - uses: ductiletoaster/harmony-ci/actions/skill-layout@v2.1.0
 
   # ── CODE QUALITY (suggested: run inline) ──────────────────────────────────
   # UNCOMMENT the block(s) for YOUR stack. lint+format → typecheck → tests.
@@ -141,10 +166,10 @@ jobs:
   #     - uses: astral-sh/setup-uv@v6
   #     # Granular: drop the type-check, or swap its checker, without touching
   #     # lint or test. Pin to a harmony-ci version that ships the python-* actions.
-  #     - uses: ductiletoaster/harmony-ci/actions/python-lint@v2.0.0
-  #     - uses: ductiletoaster/harmony-ci/actions/python-typecheck@v2.0.0
+  #     - uses: ductiletoaster/harmony-ci/actions/python-lint@v2.1.0
+  #     - uses: ductiletoaster/harmony-ci/actions/python-typecheck@v2.1.0
   #       # with: { type-checker: basedpyright }  # default is mypy (fleet standard)
-  #     - uses: ductiletoaster/harmony-ci/actions/python-test@v2.0.0
+  #     - uses: ductiletoaster/harmony-ci/actions/python-test@v2.1.0
 
   # node:
   #   name: node · biome · tsc · test
