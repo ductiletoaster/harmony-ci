@@ -61,7 +61,7 @@ None of these are requirements — they're the defaults we'd reach for, with why
 - **A scheduled depth sweep** (`security-scan.yml`). Rationale: catches CVEs
   disclosed after your last commit, and heavier scans, without gating PRs.
   Non-blocking by construction — it files an issue.
-- **Pin every `uses:` to an exact semver tag** (`@v2.2.0`) — never `@main`, never
+- **Pin every `uses:` to an exact semver tag** (`@v3.0.0`) — never `@main`, never
   a bare major (`@v1`), never a SHA. Rationale: a workflow runs with a
   write-capable token, so a floating ref is a real supply-chain surface; but a
   SHA over-corrects — it pins without telling you *what changed*, so every bump
@@ -184,6 +184,13 @@ advisory published after the image was built, and a scan against it still exits
 built", which is not the same claim as "no advisories". If you run the baked
 path, treat the image's rebuild cadence as part of your CVE coverage, and keep
 an online sweep on a schedule (`security-scan.yml`) to close the gap.
+
+`actions/osv-scanner` enforces this rather than leaving it to diligence: it
+prints the database's build date on every run and **fails** past `max-db-age`
+(30 days by default). If your image's rebuild cadence is slower than that, raise
+the threshold or set `allow-stale-db` — deliberately, and in a file someone can
+review — rather than letting the gate keep reporting a clean bill of health it
+cannot support.
 
 **The semgrep-on-github-hosted caveat.** On ARC, semgrep uses the baked,
 tokenless `harmony-baseline.yaml` ruleset. That ruleset is **private** (baked
