@@ -61,7 +61,7 @@ None of these are requirements — they're the defaults we'd reach for, with why
 - **A scheduled depth sweep** (`security-scan.yml`). Rationale: catches CVEs
   disclosed after your last commit, and heavier scans, without gating PRs.
   Non-blocking by construction — it files an issue.
-- **Pin every `uses:` to an exact semver tag** (`@v2.1.0`) — never `@main`, never
+- **Pin every `uses:` to an exact semver tag** (`@v2.2.0`) — never `@main`, never
   a bare major (`@v1`), never a SHA. Rationale: a workflow runs with a
   write-capable token, so a floating ref is a real supply-chain surface; but a
   SHA over-corrects — it pins without telling you *what changed*, so every bump
@@ -193,6 +193,11 @@ semgrep needs **either**:
 
 - a `SEMGREP_APP_TOKEN` secret (Semgrep Cloud / registry rules), **or**
 - a **vendored ruleset** committed to the repo (e.g. `.semgrep/rules.yml`).
+
+`actions/semgrep` takes the ruleset as its `config:` input for exactly this —
+the baked path is only its default. It also **refuses** `auto` and `p/*`
+outright rather than scanning with zero rules, because that particular green is
+worse than having no SAST gate at all: it looks like coverage.
 
 The floor on github-hosted **without** either is still solid — **gitleaks +
 osv-scanner + dependency-review** — so the semgrep job ships **commented** in

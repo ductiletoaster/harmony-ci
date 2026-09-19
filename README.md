@@ -63,7 +63,7 @@ run — the one claim this library makes about your infrastructure:
 | Action | What | Runner needs | Config source |
 |--------|------|--------------|---------------|
 | `actions/gitleaks` | secret scan over git history; **asserts depth and scope** — see below | `gitleaks` on PATH | — |
-| `actions/semgrep` | SAST | `semgrep` on PATH + the baked ruleset | baked `/opt/semgrep/harmony-baseline.yaml` |
+| `actions/semgrep` | SAST; **refuses a login-gated ruleset** — see below | `semgrep` on PATH + a ruleset | `config` input, default baked `/opt/semgrep/harmony-baseline.yaml` |
 | `actions/ruff` | Python lint + format (auto-detected) | `ruff` on PATH | caller's `pyproject.toml` |
 | `actions/osv-scanner` | dependency CVEs (offline baked DB); **asserts coverage** — see below | `osv-scanner` on PATH **and an offline DB** at `/opt/osv-scanner-db` — in practice a baked image | caller's lockfiles + `osv-scanner.toml` |
 | `actions/tflint` | Terraform lint (auto-detected) | `tflint` on PATH | caller's `.tflint.hcl` |
@@ -173,6 +173,45 @@ The action never passes osv-scanner's `--allow-no-lockfiles`, which prints
 "No package sources found / No issues found" and exits **0** — the silent pass in
 its purest form.
 
+### semgrep: the ruleset is yours to choose, and it cannot be a registry name
+
+A SAST gate is only as real as the rules it loads. Semgrep's registry configs
+(`auto`, `p/*`, `r/*`) are **login-gated**: without `SEMGREP_APP_TOKEN` they
+resolve to **zero rules**, find nothing, and exit **0**. That green is
+indistinguishable from a clean scan of a real ruleset — the same silent-pass
+shape as a shallow secret scan or a zero-package CVE scan.
+
+So `actions/semgrep` takes the ruleset as an input and **refuses** a registry
+name outright rather than passing it through:
+
+| Input | Default | What it does |
+|---|---|---|
+| `config` | `/opt/semgrep/harmony-baseline.yaml` | The tokenless ruleset baked into `harmony-arc-runner`. Behaviour on that image is unchanged. |
+| | a path in your repo | e.g. `.semgrep/rules.yml`. A file or a directory; it must be readable **and load at least one rule**. This is what makes the gate usable with no baked image. |
+| | `auto`, `p/…`, `r/…` | **Refused**, with the reason above. Use `semgrep ci` directly if you want registry rules and have a token. |
+
+The preflight asserts three things separately — `semgrep` on PATH, the ruleset
+readable, and the ruleset **not empty** — so a failure says *which* one is
+missing and how to fix it, rather than surfacing as `semgrep: command not
+found` or a usage error that both read like the gate itself broke.
+
+Readable is not the same as populated, and that gap is the same silent pass
+arriving by a different door: `rules: []`, an empty directory, or a directory
+of files semgrep cannot load each resolve to **zero rules**, match nothing and
+exit **0**. So the preflight runs `semgrep --validate` and reads the rule count
+out of it, failing at zero. What that cannot tell you offline is whether any of
+those rules *apply* to your code — a ruleset whose `languages:` never match
+still counts as rules and still finds nothing. It is the strongest claim
+available without running a scan; it is not a claim about coverage.
+
+```yaml
+# off a baked image: install semgrep, vendor the rules
+- uses: actions/checkout@v4
+- run: uv tool install semgrep
+- uses: ductiletoaster/harmony-ci/actions/semgrep@v2.2.0
+  with: { config: .semgrep/rules.yml }
+```
+
 ## Language-pack actions (uv-based, env-dependent)
 
 Code-quality checks that DO need the resolved dependency graph — type-checkers,
@@ -253,7 +292,7 @@ floating pin wearing a version number, so this repo does not publish one.
 
 These actions run in your CI on runners that hold write-capable tokens, so
 they're a **supply-chain surface**. Pin every `uses:` to an **exact semver tag**
-— `@v2.1.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
+— `@v2.2.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
 
 Why exact semver rather than a SHA: a SHA is immutable but opaque — it carries no
 signal about *what changed*, so every bump is an unreviewable 40-character diff
@@ -279,13 +318,13 @@ jobs:
         with: { fetch-depth: 0 }
       # On ubuntu-latest, put gitleaks on PATH first (one install step, or the
       # public gitleaks action). On an image that bakes it, this is the whole job.
-      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v2.1.0
+      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v2.2.0
   semgrep:
     name: semgrep (SAST)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ductiletoaster/harmony-ci/actions/semgrep@v2.1.0
+      - uses: ductiletoaster/harmony-ci/actions/semgrep@v2.2.0
   # …add ruff / osv-scanner / tflint / hadolint the same way; drop any you don't want.
 ```
 
