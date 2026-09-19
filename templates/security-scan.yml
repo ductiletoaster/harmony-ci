@@ -60,6 +60,16 @@ jobs:
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PIN THE SCANNER, NOT JUST THE ACTION. The `uses:` above is SHA-
+          # pinned, but the action only wraps a binary it DOWNLOADS at run time,
+          # and unset, GITLEAKS_VERSION means LATEST — so this job re-tools
+          # itself on every run while looking pinned, and an upstream rule
+          # change arrives as an unexplained red sweep. Harmony ran two weeks
+          # red on exactly that, over a fake-token test fixture a newer ruleset
+          # had started flagging. Bump this deliberately. If you also run the
+          # blocking `actions/gitleaks` gate, keep the two versions in step or
+          # they will disagree about what counts as a secret.
+          GITLEAKS_VERSION: "8.30.1"
 
   # ── Trivy fs scan (OPTIONAL — enable where you ship Dockerfiles) ───────────
   trivy:
