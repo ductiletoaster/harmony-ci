@@ -10,7 +10,18 @@ description: >
   by .gitignore, because osv-scanner's directory walk honours .gitignore and a
   gitignored lockfile otherwise silently zeroes the gate. Seeded ecosystems:
   PyPI/npm/Go/Cargo — an unseeded ecosystem needs a Dockerfile seed-tree entry.
-  Requires a harmony-arc-runner (osv-scanner + /opt/osv-scanner-db).
+
+  It ALSO asserts FRESHNESS. An offline database cannot see an advisory
+  published after the image was built, and a scan against it still exits 0 — so
+  every green means "no advisories as of whenever that image was built", which
+  nothing in the output distinguishes from "no advisories". The database's build
+  date goes to the job summary on EVERY run, and past `max-db-age` the gate
+  FAILS rather than reporting a clean bill of health.
+
+  Requires osv-scanner on PATH and an OFFLINE database directory (`db-dir`,
+  default /opt/osv-scanner-db). The scan is --offline by design, so a binary
+  alone is not enough — in practice this means a baked image such as
+  harmony-arc-runner.
 inputs:
   paths:
     description: >
@@ -44,6 +55,46 @@ inputs:
       an empty scan quietly reading as green.
     required: false
     default: "false"
+  db-dir:
+    description: >
+      Directory holding the OFFLINE vulnerability database this gate scans
+      against — and the directory whose vintage `max-db-age` measures. Default
+      `/opt/osv-scanner-db`, where harmony-arc-runner bakes it.
+      It is an input because `max-db-age` and `allow-stale-db` already were: an
+      image that bakes the database somewhere else would otherwise read as "age
+      unknown", which this gate now FAILS on, with no way to say where to look.
+      The thing being measured has to be nameable too.
+    required: false
+    default: "/opt/osv-scanner-db"
+  max-db-age:
+    description: >
+      Maximum age, in DAYS, of the offline vulnerability database before this
+      gate fails. Default 30.
+      The database is dated from `<db-dir>/BAKED_AT` if the image writes one
+      (RFC3339, or a bare YYYY-MM-DD), otherwise from the OLDEST baked
+      `all.zip` mtime — the LOWER bound on freshness, since one re-seeded
+      ecosystem must not vouch for the others a layer-cached rebuild left
+      behind.
+      While the check is ON, an age that cannot be determined counts as stale —
+      no marker and no zips, or a build date more than 24h in the FUTURE, which
+      is a broken marker rather than a very fresh database. A cutoff nobody can
+      name is not a cutoff.
+      `0` turns the freshness check off ENTIRELY, the undateable cases
+      included: "off except when we cannot measure it" is not a setting anyone
+      could predict. The age is still measured and still reported wherever it
+      can be — opting out of the gate is not opting out of knowing.
+    required: false
+    default: "30"
+  allow-stale-db:
+    description: >
+      Let a database older than max-db-age — or one whose age cannot be
+      determined at all — pass, as a warning. Default false.
+      It is an explicit, reviewable statement that this gate's CVE freshness is
+      not guaranteed here — distinct from allow-empty, which is about whether
+      anything was scanned at all. Neither stands in for the other, and neither
+      can mask a real finding.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -65,7 +116,7 @@ runs:
         # Same DB as the real scan below. The selftest asserts EXTRACTION, which
         # happens regardless of the DB, but pointing both at the same place
         # keeps the selftest a faithful rehearsal of the real invocation.
-        OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY: /opt/osv-scanner-db
+        OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY: ${{ inputs.db-dir }}
         INCLUDE_GIT_IGNORED: ${{ inputs.include-git-ignored }}
       run: |
         set -euo pipefail
@@ -127,7 +178,7 @@ runs:
       id: scan
       shell: bash
       env:
-        OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY: /opt/osv-scanner-db
+        OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY: ${{ inputs.db-dir }}
         PATHS: ${{ inputs.paths }}
         LOCKFILES: ${{ inputs.lockfiles }}
         INCLUDE_GIT_IGNORED: ${{ inputs.include-git-ignored }}
@@ -207,8 +258,13 @@ runs:
         echo "probe=$probe" >> "$GITHUB_OUTPUT"
         exit 0
 
-    # 4. The verdict. Coverage is reported on every run, pass or fail, so
-    #    "what did this gate actually look at" is visible without digging.
+    # 4. The verdict. Coverage AND the database's vintage are reported on every
+    #    run, pass or fail, so "what did this gate actually look at, and how
+    #    current was what it checked against" is visible without digging. The
+    #    dating happens here rather than in its own step so that one place owns
+    #    the verdict -- and so the contract is exercised by osv_coverage.py's
+    #    selftest, which runs in THIS repo's CI rather than only on a consumer's
+    #    runner.
     - name: Assert coverage and report
       shell: bash
       env:
@@ -218,10 +274,18 @@ runs:
         PROBE_HITS: ${{ steps.scan.outputs.probe }}
         ALLOW_EMPTY: ${{ inputs.allow-empty }}
         INCLUDE_GIT_IGNORED: ${{ inputs.include-git-ignored }}
+        MAX_DB_AGE: ${{ inputs.max-db-age }}
+        ALLOW_STALE_DB: ${{ inputs.allow-stale-db }}
+        # The same db-dir the two steps above scanned with, for the same
+        # reason: the verdict must date the database the scan actually read,
+        # not a different one. Change one of these three and you get a gate
+        # reporting the vintage of a directory nothing looked at.
+        OSV_DB_DIR: ${{ inputs.db-dir }}
       run: |
         set -uo pipefail
         args=(--results "$WALK_RESULTS" --results "$LOCK_RESULTS"
-              --scanner-exit "${SCANNER_EXIT:-0}" --probe-hits "${PROBE_HITS:-0}")
+              --scanner-exit "${SCANNER_EXIT:-0}" --probe-hits "${PROBE_HITS:-0}"
+              --db-dir "$OSV_DB_DIR" --max-db-age "${MAX_DB_AGE:-30}")
         # if-blocks, not `[ x ] && …`: the && form returns non-zero when the
         # test is false, which under -e would fail the gate for the wrong reason.
         if [ "$ALLOW_EMPTY" = "true" ]; then
@@ -229,6 +293,9 @@ runs:
         fi
         if [ "$INCLUDE_GIT_IGNORED" = "true" ]; then
           args+=(--include-git-ignored)
+        fi
+        if [ "$ALLOW_STALE_DB" = "true" ]; then
+          args+=(--allow-stale-db)
         fi
         # This exit code IS the gate's verdict.
         python3 "${{ github.action_path }}/osv_coverage.py" "${args[@]}"

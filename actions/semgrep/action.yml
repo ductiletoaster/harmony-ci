@@ -1,12 +1,162 @@
 ---
 name: semgrep (SAST)
 description: >
-  SAST via the baked, tokenless ruleset at /opt/semgrep/harmony-baseline.yaml
-  (registry configs are login-gated → zero findings, so we vendor+bake the
-  ruleset). --error makes any finding a non-zero exit. BLOCKING. Requires a
-  harmony-arc-runner (semgrep + the baked ruleset on the image).
+  SAST against an EXPLICIT ruleset. BLOCKING — --error is what makes a finding
+  a non-zero exit rather than a printed report.
+
+  The ruleset is an input, defaulting to the baked, tokenless
+  /opt/semgrep/harmony-baseline.yaml, so behaviour on a harmony-arc-runner is
+  unchanged. Point `config` at a ruleset vendored into your own repo (e.g.
+  .semgrep/rules.yml) to run this gate anywhere. NEVER `auto` or a registry
+  `p/*` config: those are login-gated, and tokenless they match NOTHING while
+  still exiting 0 — a SAST gate scanning with no rules is the silent pass this
+  library exists to stop, so this action refuses them rather than reporting a
+  clean scan.
+
+  Requires semgrep on PATH (baked on a harmony-arc-runner; elsewhere install it
+  first, e.g. `uv tool install semgrep`) and a ruleset at `config` that actually
+  contains rules. Both are asserted before the scan, separately, and a ruleset
+  that loads ZERO rules is REFUSED for the same reason a registry name is: it
+  scans nothing and exits 0.
+inputs:
+  config:
+    description: >
+      Path to the semgrep ruleset this gate scans with. It must be a readable
+      file or directory, and it must load at least one rule — an empty ruleset
+      is refused rather than scanned with.
+      `/opt/semgrep/harmony-baseline.yaml` (default) — the tokenless ruleset
+      baked into harmony-arc-runner. Unchanged behaviour on that image.
+      Any other value is a path in YOUR repo (e.g. `.semgrep/rules.yml`), which
+      is what makes this gate usable without a baked image.
+      A registry name (`auto`, `p/ci`, `r/…`) is REFUSED — see the action
+      description for why a login-gated config is worse than no gate at all.
+    required: false
+    default: "/opt/semgrep/harmony-baseline.yaml"
 runs:
   using: composite
   steps:
-    - shell: bash
-      run: semgrep scan --config /opt/semgrep/harmony-baseline.yaml --error --metrics=off
+    # 1. Preflight, asserting the two cheap halves SEPARATELY so the failure
+    #    names which one is missing. Unchecked, a missing binary surfaces as
+    #    "semgrep: command not found" and a missing ruleset as a semgrep usage
+    #    error — neither of which points at the fix, and both of which read
+    #    like the gate broke rather than like it was never wired up. The third
+    #    assertion — that the ruleset is not EMPTY — is step 2, separate because
+    #    it costs a semgrep invocation and because the binary has to exist
+    #    before anything can ask it.
+    - name: Assert semgrep and its ruleset
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+      run: |
+        set -euo pipefail
+
+        if ! command -v semgrep >/dev/null 2>&1; then
+          echo "::error::semgrep is not on this runner's PATH, so the SAST gate" \
+               "did not run at all. It is baked into harmony-arc-runner; on" \
+               "github-hosted, put it on PATH first — a step running" \
+               "'uv tool install semgrep' or 'pipx install semgrep' — or call" \
+               "'uvx semgrep' directly instead of using this action."
+          exit 1
+        fi
+
+        # Refused rather than passed through: tokenless, a registry config
+        # resolves to zero rules, finds nothing and exits 0. That is a green
+        # check standing in for a scan that never happened.
+        case "$CONFIG" in
+          auto|p/*|r/*)
+            echo "::error::config: '$CONFIG' names a Semgrep REGISTRY ruleset," \
+                 "which is login-gated. Without SEMGREP_APP_TOKEN it resolves to" \
+                 "zero rules, reports no findings and exits 0 — indistinguishable" \
+                 "from a clean scan. Vendor a ruleset into the repo and point" \
+                 "config: at the file, or run 'semgrep ci' yourself with a token."
+            exit 1
+            ;;
+        esac
+
+        if [ ! -r "$CONFIG" ]; then
+          echo "::error::semgrep ruleset '$CONFIG' is missing or unreadable, so" \
+               "this gate has no rules to scan with. On a harmony-arc-runner the" \
+               "default is baked at /opt/semgrep/harmony-baseline.yaml; anywhere" \
+               "else, vendor a ruleset into your repo and name it:"
+          echo "::error::    - uses: ductiletoaster/harmony-ci/actions/semgrep@<tag>"
+          echo "::error::        with: { config: .semgrep/rules.yml }"
+          exit 1
+        fi
+
+        echo "semgrep $(semgrep --version) scanning with ruleset: $CONFIG"
+
+    # 2. Does that ruleset contain any RULES? `-r` above proves a path is
+    #    READABLE, which is not the claim this action makes: `rules: []`, an
+    #    empty directory, or a directory of files semgrep cannot load each
+    #    resolve to ZERO rules, match nothing and exit 0 — the same silent pass
+    #    a registry name gives, arriving by a different door.
+    #
+    #    `semgrep --validate` is the cheap local way to ask. It metachecks the
+    #    config and prints, on STDERR, "Configuration is valid - found 0
+    #    configuration error(s), and N rule(s)." N is the signal: verified
+    #    against semgrep 1.171.0, both an empty `rules: []` and an empty
+    #    directory report 0 rules and exit 0, so the EXIT CODE catches neither.
+    #    SEMGREP_ENABLE_VERSION_CHECK=0 keeps the probe off the network, same
+    #    reason as --metrics=off below.
+    #
+    #    What this CANNOT establish without running a real scan: whether any of
+    #    those rules apply to this repo. A ruleset whose `languages:` never
+    #    match still counts as N rules and still finds nothing. N >= 1 is the
+    #    strongest claim available offline; it is not a claim about coverage.
+    #
+    #    The PROBE fails open. If no count can be read — an older semgrep, a
+    #    reworded message — this warns and continues, because failing a gate
+    #    over the probe's own inability to run would be a red build the caller
+    #    cannot act on. A config that is genuinely broken still fails the scan.
+    - name: Assert the ruleset has rules
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        SEMGREP_ENABLE_VERSION_CHECK: "0"
+      run: |
+        # +e on purpose: --validate's exit code is DATA. It exits non-zero on an
+        # invalid config, whose output still carries the rule count, and under
+        # -e this step would die before reading it.
+        set +e
+        set -uo pipefail
+        out="$(semgrep scan --config "$CONFIG" --validate --metrics=off 2>&1)"
+        printf '%s\n' "$out"
+        rules="$(printf '%s' "$out" \
+          | sed -n 's/.*and \([0-9][0-9]*\) rule(s).*/\1/p' | tail -n1)"
+
+        if [ -z "$rules" ]; then
+          echo "::warning::could not read a rule count from 'semgrep scan" \
+               "--validate' (see its output above), so the ruleset was NOT" \
+               "asserted to be non-empty. The scan below still runs. Check" \
+               "'$CONFIG' by hand: a config that loads zero rules scans" \
+               "nothing, finds nothing and exits 0."
+          exit 0
+        fi
+
+        if [ "$rules" -lt 1 ]; then
+          echo "::error::the semgrep ruleset '$CONFIG' loads ZERO rules. This" \
+               "gate would scan the repo against nothing, report no findings" \
+               "and exit 0 — a green check standing in for a scan that never" \
+               "happened, which is the one thing this action exists to refuse." \
+               "Readable is not the same as populated: an empty 'rules: []', an" \
+               "empty directory, or files semgrep could not load all look like" \
+               "this. Point config: at a ruleset that has rules in it:"
+          echo "::error::    - uses: ductiletoaster/harmony-ci/actions/semgrep@<tag>"
+          echo "::error::        with: { config: .semgrep/rules.yml }"
+          exit 1
+        fi
+
+        echo "ruleset '$CONFIG' loads $rules rule(s)."
+
+    # 3. The scan. --error is load-bearing: without it semgrep prints its
+    #    findings and still exits 0, which is a report rather than a gate.
+    #    --metrics=off keeps the run egress-free, which is the whole point of
+    #    a ruleset that lives on disk; SEMGREP_ENABLE_VERSION_CHECK=0 closes
+    #    the other call semgrep makes on its own, which would otherwise sit
+    #    waiting for a DNS answer on an egress-free runner.
+    - name: Scan
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        SEMGREP_ENABLE_VERSION_CHECK: "0"
+      run: semgrep scan --config "$CONFIG" --error --metrics=off
