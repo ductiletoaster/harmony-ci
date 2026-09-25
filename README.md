@@ -63,7 +63,7 @@ run — the one claim this library makes about your infrastructure:
 | Action | What | Runner needs | Config source |
 |--------|------|--------------|---------------|
 | `actions/gitleaks` | secret scan over git history; **asserts depth and scope** — see below | `gitleaks` on PATH | — |
-| `actions/semgrep` | SAST; **refuses a login-gated ruleset** — see below | `semgrep` on PATH + a ruleset | `config` input, default baked `/opt/semgrep/harmony-baseline.yaml` |
+| `actions/semgrep` | SAST; **refuses a login-gated or empty ruleset** — see below | `semgrep` and `jq` on PATH + a ruleset | `config` input, default baked `/opt/semgrep/harmony-baseline.yaml` |
 | `actions/ruff` | Python lint + format (auto-detected) | `ruff` on PATH | caller's `pyproject.toml` |
 | `actions/osv-scanner` | dependency CVEs (offline baked DB); **asserts coverage and freshness** — see below | `osv-scanner` on PATH **and an offline DB** (`db-dir`, default `/opt/osv-scanner-db`) — in practice a baked image | caller's lockfiles + `osv-scanner.toml` |
 | `actions/tflint` | Terraform lint (auto-detected) | `tflint` on PATH | caller's `.tflint.hcl` |
@@ -253,19 +253,37 @@ missing and how to fix it, rather than surfacing as `semgrep: command not
 found` or a usage error that both read like the gate itself broke.
 
 Readable is not the same as populated, and that gap is the same silent pass
-arriving by a different door: `rules: []`, an empty directory, or a directory
-of files semgrep cannot load each resolve to **zero rules**, match nothing and
-exit **0**. So the preflight runs `semgrep --validate` and reads the rule count
-out of it, failing at zero. What that cannot tell you offline is whether any of
-those rules *apply* to your code — a ruleset whose `languages:` never match
-still counts as rules and still finds nothing. It is the strongest claim
-available without running a scan; it is not a claim about coverage.
+arriving by a different door: `rules: []` loads **zero rules**, matches nothing
+and exits **0**. So the preflight counts the rules semgrep actually loads, and
+fails at zero. It counts **offline**, with semgrep's own loader: the same
+`--config` over an empty target, reading the rule list out of semgrep's SARIF
+output (so it needs `jq` on PATH as well). That asks the binary that will run
+the scan, so a directory is walked exactly as the scan walks it. Measured
+against semgrep 1.171.0 with no network, it takes about two seconds.
+
+The count **fails closed**. A config semgrep cannot load at all — an empty
+directory, invalid YAML, a rule missing `message:`, one bad file among good ones
+— is refused with the loader's own reason; the scan would have failed on it
+anyway, with the same exit code. Output the count cannot be read from is a
+failure too, not a warning: an unreadable count is not a populated ruleset.
+
+In v3.0.0 this count came from `semgrep --validate`, which is **not**
+offline: it downloads a metacheck ruleset from semgrep.dev. With no egress it
+retried for 98 seconds, printed no count, and the check then warned and let the
+scan run — skipping itself on exactly the runner it was written for. Since
+v4.0.0 the count needs no network, and an empty ruleset fails on an egress-free
+runner as it always did on a connected one.
+
+What the count cannot tell you is whether any of those rules *apply* to your
+code — a ruleset whose `languages:` never match still counts as rules and still
+finds nothing. It is the strongest claim available without running a scan; it
+is not a claim about coverage.
 
 ```yaml
 # off a baked image: install semgrep, vendor the rules
 - uses: actions/checkout@v4
 - run: uv tool install semgrep
-- uses: ductiletoaster/harmony-ci/actions/semgrep@v3.0.0
+- uses: ductiletoaster/harmony-ci/actions/semgrep@v4.0.0
   with: { config: .semgrep/rules.yml }
 ```
 
@@ -351,7 +369,7 @@ floating pin wearing a version number, so this repo does not publish one.
 
 These actions run in your CI on runners that hold write-capable tokens, so
 they're a **supply-chain surface**. Pin every `uses:` to an **exact semver tag**
-— `@v3.0.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
+— `@v4.0.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
 
 Why exact semver rather than a SHA: a SHA is immutable but opaque — it carries no
 signal about *what changed*, so every bump is an unreviewable 40-character diff
@@ -377,13 +395,13 @@ jobs:
         with: { fetch-depth: 0 }
       # On ubuntu-latest, put gitleaks on PATH first (one install step, or the
       # public gitleaks action). On an image that bakes it, this is the whole job.
-      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v3.0.0
+      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v4.0.0
   semgrep:
     name: semgrep (SAST)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ductiletoaster/harmony-ci/actions/semgrep@v3.0.0
+      - uses: ductiletoaster/harmony-ci/actions/semgrep@v4.0.0
   # …add ruff / osv-scanner / tflint / hadolint the same way; drop any you don't want.
 ```
 

@@ -13,11 +13,14 @@ description: >
   library exists to stop, so this action refuses them rather than reporting a
   clean scan.
 
-  Requires semgrep on PATH (baked on a harmony-arc-runner; elsewhere install it
-  first, e.g. `uv tool install semgrep`) and a ruleset at `config` that actually
-  contains rules. Both are asserted before the scan, separately, and a ruleset
-  that loads ZERO rules is REFUSED for the same reason a registry name is: it
-  scans nothing and exits 0.
+  Requires semgrep and jq on PATH (both present on harmony-arc-runner; jq ships
+  on ubuntu-latest; elsewhere install semgrep first, e.g. `uv tool install
+  semgrep`) and a ruleset at `config` that actually contains rules. Each is
+  asserted before the scan, separately, and a ruleset that loads ZERO rules is
+  REFUSED for the same reason a registry name is: it scans nothing and exits 0.
+  The rules are counted OFFLINE, by semgrep's own loader over an empty target —
+  not `--validate`, which fetches a metacheck ruleset from semgrep.dev — and
+  the count fails CLOSED: no count is a failure, never a warning.
 inputs:
   config:
     description: >
@@ -41,8 +44,8 @@ runs:
     #    error — neither of which points at the fix, and both of which read
     #    like the gate broke rather than like it was never wired up. The third
     #    assertion — that the ruleset is not EMPTY — is step 2, separate because
-    #    it costs a semgrep invocation and because the binary has to exist
-    #    before anything can ask it.
+    #    it costs a semgrep invocation (and needs jq) and because the binary has
+    #    to exist before anything can ask it.
     - name: Assert semgrep and its ruleset
       shell: bash
       env:
@@ -86,67 +89,37 @@ runs:
         echo "semgrep $(semgrep --version) scanning with ruleset: $CONFIG"
 
     # 2. Does that ruleset contain any RULES? `-r` above proves a path is
-    #    READABLE, which is not the claim this action makes: `rules: []`, an
-    #    empty directory, or a directory of files semgrep cannot load each
-    #    resolve to ZERO rules, match nothing and exit 0 — the same silent pass
-    #    a registry name gives, arriving by a different door.
+    #    READABLE, which is not the claim this action makes: `rules: []`
+    #    resolves to ZERO rules, matches nothing and exits 0 — the same silent
+    #    pass a registry name gives, arriving by a different door.
     #
-    #    `semgrep --validate` is the cheap local way to ask. It metachecks the
-    #    config and prints, on STDERR, "Configuration is valid - found 0
-    #    configuration error(s), and N rule(s)." N is the signal: verified
-    #    against semgrep 1.171.0, both an empty `rules: []` and an empty
-    #    directory report 0 rules and exit 0, so the EXIT CODE catches neither.
-    #    SEMGREP_ENABLE_VERSION_CHECK=0 keeps the probe off the network, same
-    #    reason as --metrics=off below.
+    #    Asked OFFLINE, of semgrep's own loader: rule_count.sh loads `config`
+    #    exactly as the scan below will, over an empty target, and counts the
+    #    rules semgrep lists in its SARIF output. No metacheck, no registry
+    #    fetch. 3.0.0 asked `semgrep --validate` instead, and --validate is NOT
+    #    offline — it downloads p/semgrep-rule-lints from semgrep.dev. On an
+    #    egress-free runner it retried for 98 s, printed no count, and this
+    #    step then failed OPEN: the check skipped itself on exactly the runner
+    #    it was written for. rule_count.sh has the measurements and the
+    #    alternatives it rejected.
     #
-    #    What this CANNOT establish without running a real scan: whether any of
-    #    those rules apply to this repo. A ruleset whose `languages:` never
-    #    match still counts as N rules and still finds nothing. N >= 1 is the
-    #    strongest claim available offline; it is not a claim about coverage.
+    #    FAILS CLOSED, including when no count can be read. The old fail-open
+    #    existed because the probe needed a network the runner might not have;
+    #    this one needs none, so every way to get no count is one the caller
+    #    can act on. A config semgrep cannot load fails the real scan below
+    #    identically (same loader, same exit code), so stopping here changes no
+    #    verdict — it names the reason sooner. Output semgrep has reshaped is a
+    #    semgrep to pin, not a reason to scan unverified.
     #
-    #    The PROBE fails open. If no count can be read — an older semgrep, a
-    #    reworded message — this warns and continues, because failing a gate
-    #    over the probe's own inability to run would be a red build the caller
-    #    cannot act on. A config that is genuinely broken still fails the scan.
+    #    What this CANNOT establish without scanning: whether any of those rules
+    #    apply to this repo. A ruleset whose `languages:` never match still
+    #    counts as N rules and still finds nothing. N >= 1 is the strongest
+    #    claim available offline; it is not a claim about coverage.
     - name: Assert the ruleset has rules
       shell: bash
       env:
         CONFIG: ${{ inputs.config }}
-        SEMGREP_ENABLE_VERSION_CHECK: "0"
-      run: |
-        # +e on purpose: --validate's exit code is DATA. It exits non-zero on an
-        # invalid config, whose output still carries the rule count, and under
-        # -e this step would die before reading it.
-        set +e
-        set -uo pipefail
-        out="$(semgrep scan --config "$CONFIG" --validate --metrics=off 2>&1)"
-        printf '%s\n' "$out"
-        rules="$(printf '%s' "$out" \
-          | sed -n 's/.*and \([0-9][0-9]*\) rule(s).*/\1/p' | tail -n1)"
-
-        if [ -z "$rules" ]; then
-          echo "::warning::could not read a rule count from 'semgrep scan" \
-               "--validate' (see its output above), so the ruleset was NOT" \
-               "asserted to be non-empty. The scan below still runs. Check" \
-               "'$CONFIG' by hand: a config that loads zero rules scans" \
-               "nothing, finds nothing and exits 0."
-          exit 0
-        fi
-
-        if [ "$rules" -lt 1 ]; then
-          echo "::error::the semgrep ruleset '$CONFIG' loads ZERO rules. This" \
-               "gate would scan the repo against nothing, report no findings" \
-               "and exit 0 — a green check standing in for a scan that never" \
-               "happened, which is the one thing this action exists to refuse." \
-               "Readable is not the same as populated: an empty 'rules: []', an" \
-               "empty directory, or files semgrep could not load all look like" \
-               "this. Point config: at a ruleset that has rules in it:"
-          echo "::error::    - uses: ductiletoaster/harmony-ci/actions/semgrep@<tag>"
-          echo "::error::        with: { config: .semgrep/rules.yml }"
-          exit 1
-        fi
-
-        echo "ruleset '$CONFIG' loads $rules rule(s)."
+      run: bash "${{ github.action_path }}/rule_count.sh" "$CONFIG"
 
     # 3. The scan. --error is load-bearing: without it semgrep prints its
     #    findings and still exits 0, which is a report rather than a gate.
