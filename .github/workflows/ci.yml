@@ -123,3 +123,34 @@ jobs:
         # itself, i.e. on a CONSUMER's runner. Running it here means a broken
         # verdict fails on the PR instead of shipping.
         run: python3 actions/osv-scanner/osv_coverage.py --selftest
+
+  semgrep-rule-count:
+    name: semgrep rule count selftest (offline)
+    # actions/semgrep refuses a ruleset that loads zero rules, and the count it
+    # refuses on comes from rule_count.sh. That script's whole claim is that it
+    # works WITHOUT a network — 3.0.0 counted with `semgrep --validate`, which
+    # fetches from semgrep.dev, retried for 98 s on an egress-free runner and
+    # then skipped the check. A selftest run WITH a network would pass that
+    # regression, so this one runs in a network namespace with no interfaces
+    # up, and first proves it cannot reach anything.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install semgrep
+        # Pinned to the version baked into harmony-arc-runner v0.3.8, which is
+        # the version rule_count.sh's measurements were taken against.
+        run: pipx install semgrep==1.171.0
+      - name: rule_count selftest, with no network
+        run: |
+          # sudo for the namespace, then straight back to the runner user:
+          # semgrep must run as it would on a consumer's runner, not as root.
+          sudo unshare --net -- sudo -u "$(id -un)" \
+            env "PATH=$PATH" "HOME=$HOME" bash -euo pipefail -c '
+              if curl -sS --max-time 5 -o /dev/null https://semgrep.dev; then
+                echo "::error::semgrep.dev is reachable inside the namespace," \
+                     "so this selftest would not prove the count is offline."
+                exit 1
+              fi
+              echo "confirmed: no network in this namespace."
+              timeout 300 bash actions/semgrep/rule_count.sh --selftest
+            '
