@@ -138,6 +138,122 @@ none of them are obvious from the tools' own docs.
 
 ---
 
+## Lessons that generalize — a green has to mean something
+
+Each of these started as a single bug in a single consumer. They are written
+down here because each one is a *class* of problem: once you know its shape
+you find it everywhere.
+
+### A gate states its own coverage
+
+A check that exits 0 has told you nothing until it also says **what it looked
+at**. Every action here prints its coverage on every run, pass or fail: commits
+scanned, rules loaded, packages found, database age. Each of those lines exists
+because the matching silent pass happened for real:
+
+- a depth-1 clone gave gitleaks one commit to scan;
+- a gitignored lockfile gave osv-scanner zero packages;
+- a registry ruleset gave semgrep zero rules without a token;
+- a months-old offline database gave osv-scanner no recent advisories.
+
+All four were green. When you write your own gate, ask what "nothing found"
+would look like if the tool had silently scanned nothing, and assert against
+that.
+
+### Prove offline claims offline
+
+"Runs without egress" is a property you test with the network off
+(`docker run --network none`), not one you assume from the docs. `semgrep
+--validate` looked like a local syntax check. In fact it fetched a lint ruleset
+from semgrep.dev; with no network it retried for about 100 seconds, then
+**passed anyway**. The gate now counts rules from a local SARIF scan instead,
+and fails closed if it can't.
+
+### A check about history needs the history
+
+`actions/checkout` defaults to `fetch-depth: 1`. Any check that reasons about
+ancestry needs the history it reasons about: a secret scan over a branch, "is
+this evidence commit still reachable from main", or "was this merged with a
+merge commit". On a shallow clone such a check either errors, or worse, falls
+back to something weaker without saying so. Fetch the depth the check needs,
+and make the fallback fail in CI instead of quietly degrading.
+
+### Suppress a class, not an instance
+
+False positives are inevitable. How you silence them decides whether the gate
+survives. **Precision** narrows what a rule matches and keeps detecting
+everything else:
+
+- anchored allowlist regexes;
+- `targetRules` scoping;
+- path scoping;
+- entropy tuning.
+
+**Blindness** switches detection off:
+
+- per-commit fingerprints (`.gitleaksignore`);
+- disabling a rule.
+
+A fingerprint also re-fires the moment the same string lands in a new commit,
+so the list only grows. In one consumer, converting fingerprints to class
+allowlists cut the list from 44 entries to 26. Every entry left is a real
+credential awaiting rotation, which is exactly what that list should hold.
+
+gitleaks makes this subtle, so prove each allowlist with a probe that has to
+be caught:
+
+- `stopwords` are **substring** tests: a short stopword suppressed a freshly
+  generated random key that happened to contain it.
+- The combinator key is `condition`, not `matchCondition`.
+- Unknown keys are **silently ignored**, so a typo turns AND into OR with no
+  error.
+
+Build the probe at runtime, both provider-shaped and generic high-entropy, and
+assert gitleaks still finds it. Reading the TOML back proves nothing.
+
+### A workflow that never ran is not passing
+
+Absence of red is not green. Three patterns hid real breakage in one consumer
+for months:
+
+- **Dead triggers.** After a `master` → `main` rename, every workflow still
+  filtering `push: branches: [master]` stopped firing. Nothing errors; the
+  workflow simply never runs. Four workflows sat dead this way, including the
+  deploy that would have shipped an image that could not start.
+- **Failures nobody sees.** A `workflow_run`-triggered job never appears on a
+  PR, so it failed 200 runs out of 200 without anyone noticing.
+- **Protection that exists only in comments.** A job naming
+  `environment: staging` makes GitHub create that environment on first use,
+  **unprotected**. The workflow comment promising "required reviewers" was the
+  only place the protection existed.
+
+After a branch rename, or when adopting a repo, list its workflows by last-run
+date and conclusion. Treat zero runs, and 100% failure, as findings.
+
+### Keep secrets away from scanners
+
+A security gate runs third-party code over your whole tree, including a
+vulnerability database, a ruleset and a scanner binary. It needs `contents:
+read` and nothing else. If your self-hosted pool injects credentials (a
+secrets-manager token, a deploy key) into every runner pod, give the gates
+their own small pool that injects none. Gates are also cheap: measured peaks
+are a few hundred MiB, so sizing them like build runners wastes the capacity
+the builds are queueing for. If the pool still grants privileged
+Docker-in-Docker, the isolation holds only at the pod-spec level. A job that
+can start a privileged container can leave it.
+
+### One version, one source
+
+When the same tool appears in two places, they drift, and nothing fails until
+the day they disagree. A Playwright test image pinned in a Dockerfile drifted
+from the `@playwright/test` version in `package.json`. The suite then hung
+until the job timeout, for weeks. The fix is to derive one from the other (the
+image tag read from the lockfile), not to bump both more carefully. The same
+applies to `packageManager` and the pnpm version in CI, and to a baked scanner
+version and the one your scheduled sweep downloads.
+
+---
+
 ## Runners — github-hosted is the baseline, self-hosted is an optimization
 
 **Start on `ubuntu-latest`** (`ci-github-hosted.yml`). It sources the floor from
