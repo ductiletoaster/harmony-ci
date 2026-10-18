@@ -283,7 +283,7 @@ is not a claim about coverage.
 # off a baked image: install semgrep, vendor the rules
 - uses: actions/checkout@v4
 - run: uv tool install semgrep
-- uses: ductiletoaster/harmony-ci/actions/semgrep@v4.1.0
+- uses: ductiletoaster/harmony-ci/actions/semgrep@v4.1.1
   with: { config: .semgrep/rules.yml }
 ```
 
@@ -339,7 +339,7 @@ jobs:
   probe:
     runs-on: <YOUR-ARC-LABEL>
     steps:
-      - uses: ductiletoaster/harmony-ci/actions/runner-probe@v4.1.0
+      - uses: ductiletoaster/harmony-ci/actions/runner-probe@v4.1.1
         with:
           unreachable-targets: |
             10.96.0.1:443        # the cluster's API service
@@ -461,13 +461,13 @@ jobs:
         with: { fetch-depth: 0 }
       # On ubuntu-latest, put gitleaks on PATH first (one install step, or the
       # public gitleaks action). On an image that bakes it, this is the whole job.
-      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v4.1.0
+      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v4.1.1
   semgrep:
     name: semgrep (SAST)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ductiletoaster/harmony-ci/actions/semgrep@v4.1.0
+      - uses: ductiletoaster/harmony-ci/actions/semgrep@v4.1.1
   # …add ruff / osv-scanner / tflint / hadolint the same way; drop any you don't want.
 ```
 

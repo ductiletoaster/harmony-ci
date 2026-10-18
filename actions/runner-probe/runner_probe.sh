@@ -400,7 +400,10 @@ hostnet_verdict() { # root
     return
   fi
   for path in "$dir"/*; do
-    [ -e "$path" ] || continue
+    # Interfaces are directories (symlinks to them on a real sysfs). Skip plain
+    # files: the bonding module adds a `bonding_masters` control file to EVERY
+    # network namespace, pod ones included, so its name proves nothing.
+    [ -d "$path" ] || continue
     name="${path##*/}"
     names+=("$name")
     for glob in "${HOST_IFACE_GLOBS[@]}"; do
@@ -793,6 +796,14 @@ selftest() {
     "$n/sys/class/net/sit0" "$n/sys/class/net/veth1a2b" "$n/sys/class/net/br-0f1e"
   hostnet_verdict "$n"
   expect "kernel tunnel devices and dind veth/br pass" "$V_RESULT" "PASS"
+  local b="$work/bond"
+  mkdir -p "$b/sys/class/net/lo" "$b/sys/class/net/eth0"
+  : >"$b/sys/class/net/bonding_masters"
+  hostnet_verdict "$b"
+  expect "a bonding_masters control file alone passes" "$V_RESULT" "PASS"
+  mkdir -p "$b/sys/class/net/bond0"
+  hostnet_verdict "$b"
+  expect "a real bond0 interface still fails" "$V_RESULT" "FAIL"
   hostnet_verdict "$work/nowhere"
   expect "no /sys/class/net is REPORTed" "$V_RESULT" "REPORT"
 
