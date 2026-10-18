@@ -123,6 +123,11 @@ jobs:
         # itself, i.e. on a CONSUMER's runner. Running it here means a broken
         # verdict fails on the PR instead of shipping.
         run: python3 actions/osv-scanner/osv_coverage.py --selftest
+      - name: runner_probe selftest
+        # Same reason as the osv one: the probe's parsers are otherwise only
+        # exercised on a consumer's runner, where a broken one reports PASS
+        # about something it no longer measures. Bash only; no tools to install.
+        run: bash actions/runner-probe/runner_probe.sh --selftest
 
   semgrep-rule-count:
     name: semgrep rule count selftest (offline)

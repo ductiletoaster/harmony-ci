@@ -283,9 +283,75 @@ is not a claim about coverage.
 # off a baked image: install semgrep, vendor the rules
 - uses: actions/checkout@v4
 - run: uv tool install semgrep
-- uses: ductiletoaster/harmony-ci/actions/semgrep@v4.0.0
+- uses: ductiletoaster/harmony-ci/actions/semgrep@v4.1.0
   with: { config: .semgrep/rules.yml }
 ```
+
+## Runner probe: does the pool's hardening actually hold?
+
+The gates above check your code. `actions/runner-probe` checks the **runner**.
+A self-hosted pool's hardening usually lives in YAML (no service-account token,
+no secret env, nothing privileged but the Docker sidecar, no host namespaces),
+and YAML is a claim about the pod. The probe runs inside a job on the pool,
+attempts each thing a job should not be able to do, and records whether it was
+refused. Run it from a `workflow_dispatch` job after every change to the pool.
+
+| Action | What | Runner needs |
+|--------|------|--------------|
+| `actions/runner-probe` | attempts the forbidden actions below from inside a job and asserts each is refused | bash, coreutils and curl. No python3, egress or credentials. |
+
+| Check | Fails when | Notes |
+|---|---|---|
+| `sa-token` | a Kubernetes service-account token is mounted | |
+| `kube-api` | the API **authorizes** an anonymous request | tried by `$KUBERNETES_SERVICE_HOST` and by `kubernetes.default.svc`. A reachable API that refuses without a token is a network finding. |
+| `credential-env` | an env var's **name** looks like a credential (TOKEN, SECRET, PASSWORD, KEY, PAT…) | names only; a value is never printed. Matches whole name segments, so `PATH` and `TOKENIZERS_PARALLELISM` don't count. GitHub's `ACTIONS_*` and `GITHUB_TOKEN` are skipped. |
+| `privileged` | the effective or bounding capability set is complete, or includes `CAP_SYS_ADMIN` | the bounding set matters even for a non-root job: sudo or a setuid binary can take what it allows. |
+| `host-pid` | kernel threads are visible, or PID 1 is a host init | |
+| `host-network` | a host-side interface (`cni0`, `flannel.1`, a physical NIC…) is visible | **a heuristic on interface names**, and the reason says so. `docker0`, `br-*` and `veth*` are allowed: a Docker-in-Docker sidecar creates them inside the pod. |
+| `cloud-metadata` | 169.254.169.254:80 is reachable | network finding |
+| `unreachable` | a `host:port` you list is reachable | network finding |
+| `not-writable` | a path you list is writable | a real write attempt, cleaned up after |
+
+**Network findings REPORT, they don't fail, until you say isolation is
+expected.** Before a pool has egress policy, a reachable API server is the
+expected state, and a probe that is always red stops being read. Set
+`expect-network-isolation: true` once the policy lands, and every reachable one
+fails. A REPORT is never a disguised pass either: a name that doesn't resolve,
+or a path that doesn't exist, is reported as *not tested*.
+
+| Input | Default | What it does |
+|---|---|---|
+| `expect-network-isolation` | `false` | `true` turns every network finding into a FAIL. |
+| `unreachable-targets` | — | `host:port` targets that must be unreachable, one TCP connect each (`[v6]:port` for IPv6, `#` comments allowed). A malformed entry stops the probe instead of being skipped. |
+| `not-writable-paths` | — | Paths the job must not be able to write. |
+| `allowed-env-names` | — | Exact names `credential-env` should skip, for a base image's `GPG_KEY` and similar. Each one is a reviewable statement that it's not a secret. |
+| `connect-timeout` | `3` | Seconds per connection attempt. |
+
+Everything environment-specific comes in as an input: the action knows no
+addresses. A selftest step proves every check's parser on fixtures before the
+probe runs, and this repo's CI runs the same selftest.
+
+```yaml
+# .github/workflows/runner-probe.yaml, in the repo that owns the pool
+on: workflow_dispatch
+permissions: {}
+jobs:
+  probe:
+    runs-on: <YOUR-ARC-LABEL>
+    steps:
+      - uses: ductiletoaster/harmony-ci/actions/runner-probe@v4.1.0
+        with:
+          unreachable-targets: |
+            10.96.0.1:443        # the cluster's API service
+            192.0.2.10:6443      # a node's API server
+```
+
+**Not covered:** what a container started through a Docker daemon the job can
+reach would see. A privileged sidecar is a separate boundary from the job's own
+container, and testing it means starting containers. For the same reason, run
+the probe as a plain step rather than under `container:`: a job container is
+started through that daemon, so the probe would describe it instead of the
+runner.
 
 ## Language-pack actions (uv-based, env-dependent)
 
@@ -369,7 +435,7 @@ floating pin wearing a version number, so this repo does not publish one.
 
 These actions run in your CI on runners that hold write-capable tokens, so
 they're a **supply-chain surface**. Pin every `uses:` to an **exact semver tag**
-— `@v4.0.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
+— `@v4.1.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
 
 Why exact semver rather than a SHA: a SHA is immutable but opaque — it carries no
 signal about *what changed*, so every bump is an unreviewable 40-character diff
@@ -395,13 +461,13 @@ jobs:
         with: { fetch-depth: 0 }
       # On ubuntu-latest, put gitleaks on PATH first (one install step, or the
       # public gitleaks action). On an image that bakes it, this is the whole job.
-      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v4.0.0
+      - uses: ductiletoaster/harmony-ci/actions/gitleaks@v4.1.0
   semgrep:
     name: semgrep (SAST)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ductiletoaster/harmony-ci/actions/semgrep@v4.0.0
+      - uses: ductiletoaster/harmony-ci/actions/semgrep@v4.1.0
   # …add ruff / osv-scanner / tflint / hadolint the same way; drop any you don't want.
 ```
 

@@ -1,0 +1,87 @@
+---
+name: runner probe (live hardening check)
+description: >
+  Asks a self-hosted runner, from inside a job, whether its hardening actually
+  holds: it attempts each thing a job should not be able to do and records
+  whether it was refused. No Kubernetes service-account token; the Kubernetes
+  API gives an unauthenticated job nothing; no credential-looking env vars
+  (names only, never values); not privileged and no CAP_SYS_ADMIN; not in the
+  host's PID or network namespace; the cloud metadata endpoint, and any
+  host:port you list, unreachable; any path you list not writable.
+
+  Each check prints PASS, FAIL or REPORT with a one-line reason, and the table
+  goes to the job summary on EVERY run. FAIL fails the job and names the fix.
+  REPORT never fails it: it records a network finding while
+  `expect-network-isolation` is false, or a check that could not be tested here,
+  and says which. Run it as a plain job step (no `container:`), from
+  `workflow_dispatch`, after every change to the pool. Needs bash, coreutils and
+  curl; no python3, no network egress, no credentials.
+inputs:
+  expect-network-isolation:
+    description: >
+      Whether this runner is supposed to have egress policy yet. Default false:
+      a reachable Kubernetes API, metadata endpoint or listed target is
+      REPORTed, not failed, because until a pool has egress policy that IS the
+      expected state, and a probe that is always red stops being read. Set it to
+      true once the policy lands, and every reachable one FAILs. An anonymous
+      request the Kubernetes API AUTHORIZES fails either way.
+    required: false
+    default: "false"
+  unreachable-targets:
+    description: >
+      host:port targets this runner must not be able to reach, whitespace- or
+      newline-separated; an IPv6 literal goes in brackets ([fd00::1]:443). `#`
+      starts a comment to the end of the line, so a YAML block can say what
+      each address is. Each is one TCP connect: accepted is reachable, while
+      refused, timed out and no route are unreachable. A name that does not
+      resolve is REPORTed as untested, not passed. A malformed entry stops the
+      probe before anything runs, rather than being skipped. Default: none.
+    required: false
+    default: ""
+  not-writable-paths:
+    description: >
+      Paths this job must not be able to write, whitespace- or
+      newline-separated, with `#` comments. A directory is tested by creating a
+      file in it and removing it again; a file by opening it for append and
+      writing nothing. A path that does not exist is REPORTed as untested.
+      Default: none.
+    required: false
+    default: ""
+  allowed-env-names:
+    description: >
+      Exact env var names the credential-env check should skip, for a name
+      that only looks like a credential (a base image's GPG_KEY, for example).
+      Every entry is a reviewable statement that this name is not a secret.
+      GitHub's own ACTIONS_* variables and GITHUB_TOKEN are always skipped.
+      Default: none.
+    required: false
+    default: ""
+  connect-timeout:
+    description: >
+      Seconds to wait on each connection attempt before calling it dropped.
+      Default 3.
+    required: false
+    default: "3"
+runs:
+  using: composite
+  steps:
+    # 1. Do the parsers still read what they claim to? Every verdict below is a
+    #    parse of /proc, /sys, a connect error or an HTTP code. A parser that
+    #    drifted would report PASS about something it no longer measures, and
+    #    nothing in the table would show it. Offline, fixture-based, about a
+    #    second.
+    - name: Selftest — check parsers
+      shell: bash
+      run: bash "${{ github.action_path }}/runner_probe.sh" --selftest
+
+    # 2. The probe. Its exit code is the verdict; the table goes to the job
+    #    summary whether it passes or not.
+    - name: Probe this runner
+      shell: bash
+      env:
+        PROBE_EXPECT_NETWORK_ISOLATION: ${{ inputs.expect-network-isolation }}
+        PROBE_UNREACHABLE_TARGETS: ${{ inputs.unreachable-targets }}
+        PROBE_NOT_WRITABLE_PATHS: ${{ inputs.not-writable-paths }}
+        PROBE_ALLOWED_ENV_NAMES: ${{ inputs.allowed-env-names }}
+        PROBE_CONNECT_TIMEOUT: ${{ inputs.connect-timeout }}
+      run: bash "${{ github.action_path }}/runner_probe.sh" run
