@@ -435,7 +435,7 @@ floating pin wearing a version number, so this repo does not publish one.
 
 These actions run in your CI on runners that hold write-capable tokens, so
 they're a **supply-chain surface**. Pin every `uses:` to an **exact semver tag**
-— `@v4.1.0`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
+— `@v4.1.1`. Never `@main`, never a bare major (`@v1`), never a commit SHA.
 
 Why exact semver rather than a SHA: a SHA is immutable but opaque — it carries no
 signal about *what changed*, so every bump is an unreviewable 40-character diff
