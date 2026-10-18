@@ -3,7 +3,8 @@ name: tflint (terraform lint)
 description: >
   Terraform lint via the baked tflint (bundled rules only — no --init/plugins, so
   egress-free). Reads the caller's .tflint.hcl if present. Skips cleanly when the
-  caller has no *.tf. BLOCKING. Requires a harmony-arc-runner (tflint on PATH).
+  caller has no *.tf. BLOCKING. Requires tflint on PATH (baked into a
+  self-hosted runner image, or installed first).
 runs:
   using: composite
   steps:

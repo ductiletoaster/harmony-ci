@@ -3,8 +3,9 @@ name: python-test (pytest via uv)
 description: >
   Python tests via the CALLER's own pinned pytest (`uv run pytest`), running in
   the consumer's uv env (needs the resolved deps). Auto-detected: skips cleanly
-  (not silent-green) when the repo has no pyproject.toml. Requires uv on PATH:
-  baked into harmony-arc-runner; on github-hosted, run astral-sh/setup-uv first.
+  (not silent-green) when the repo has no pyproject.toml. Requires uv on PATH
+  (baked into a self-hosted runner image, or installed first: on github-hosted,
+  run astral-sh/setup-uv before this).
   Pass extra flags (paths, -k, -m, coverage, …) via `args`.
 inputs:
   args:

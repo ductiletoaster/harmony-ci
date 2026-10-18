@@ -1,8 +1,8 @@
 ---
-# ci-arc.yml — inline CI on a harmony-arc-runner (COPY-AND-ADAPT STARTING POINT)
+# ci-arc.yml — inline CI on a self-hosted runner (COPY-AND-ADAPT STARTING POINT)
 #
 # For a repo that HAS a self-hosted pool whose image bakes the gate tools,
-# rulesets and an offline OSV DB (Harmony uses harmony-arc-runner). That buys an
+# rulesets and an offline OSV DB. That buys an
 # egress-free, tokenless floor — worth having on a blocking gate.
 #
 # If you do NOT have such a pool, use ci-github-hosted.yml instead; it is the
@@ -14,7 +14,7 @@
 # TO USE (adapt freely):
 #   1. Copy this file to YOUR repo as .github/workflows/ci.yml
 #   2. Replace every `<YOUR-ARC-LABEL>` with your ARC pool label
-#      (e.g. `harmony-cluster`, `fire-risk-ci`, `lattice`).
+#      (e.g. `my-arc-pool`).
 #   3. Uncomment the code-quality block(s) for YOUR stack (Python/Node/IaC/Docker).
 #   4. (Optional) Add templates/security-scan.yml for a scheduled depth sweep.
 #   5. (Optional) If you want these to block merges, mark them required in branch
@@ -42,7 +42,7 @@ jobs:
 
   gitleaks:
     name: gitleaks (secret scan)
-    runs-on: <YOUR-ARC-LABEL>  # e.g. harmony-cluster / fire-risk-ci / lattice
+    runs-on: <YOUR-ARC-LABEL>  # e.g. my-arc-pool
     steps:
       # gitleaks scans the full history, so fetch-depth: 0 is REQUIRED.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -52,7 +52,7 @@ jobs:
 
   semgrep:
     name: semgrep (SAST)
-    runs-on: <YOUR-ARC-LABEL>  # e.g. harmony-cluster / fire-risk-ci / lattice
+    runs-on: <YOUR-ARC-LABEL>  # e.g. my-arc-pool
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # Defaults to the baked, tokenless ruleset
@@ -62,11 +62,11 @@ jobs:
 
   osv-scanner:
     name: osv-scanner (dependency CVEs)
-    runs-on: <YOUR-ARC-LABEL>  # e.g. harmony-cluster / fire-risk-ci / lattice
+    runs-on: <YOUR-ARC-LABEL>  # e.g. my-arc-pool
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      # Reads the offline baked DB (egress-free). Seeded ecosystems:
-      # PyPI/npm/Go/Cargo — an unseeded ecosystem needs a runner-image seed entry.
+      # Reads the offline baked DB (egress-free). Only the ecosystems your
+      # image seeds are covered — an unseeded one needs a runner-image seed entry.
       # The DB's build date is printed every run, and past max-db-age (30 days
       # by default) the gate FAILS rather than reporting a clean bill of health
       # it cannot support. If your image rebuilds less often than that, raise
@@ -117,7 +117,7 @@ jobs:
   #   steps:
   #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
   #     # The python-* language-pack actions run YOUR OWN pinned ruff/mypy/pytest
-  #     # via `uv run` (uv is baked into harmony-arc-runner) — so CI matches local
+  #     # via `uv run` (uv baked into your runner image) — so CI matches local
   #     # dev exactly. Granular on purpose: drop the type-check, or swap its
   #     # checker, without touching lint or test. Pin to a harmony-ci version that
   #     # includes the python-* actions. (Want parallel jobs + distinct checks?

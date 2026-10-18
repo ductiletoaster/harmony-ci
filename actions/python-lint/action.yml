@@ -6,9 +6,9 @@ description: >
   keeps CI identical to local dev and to the other uv-run steps — no baked-vs-
   pinned version skew. Auto-detected: skips cleanly (not silent-green) when the
   repo has no pyproject.toml, so it's safe on a mixed/non-Python job.
-  Requires uv on PATH: baked into harmony-arc-runner; on github-hosted, run
-  astral-sh/setup-uv before this. (For a repo WITHOUT uv, use actions/ruff — the
-  baked, env-independent variant — instead.)
+  Requires uv on PATH (baked into a self-hosted runner image, or installed
+  first: on github-hosted, run astral-sh/setup-uv before this). (For a repo
+  WITHOUT uv, use actions/ruff — the baked, env-independent variant — instead.)
 runs:
   using: composite
   steps:
