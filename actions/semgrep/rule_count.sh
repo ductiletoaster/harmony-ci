@@ -11,7 +11,7 @@
 #
 # WHY NOT `semgrep --validate`. That is what 3.0.0 used, and it is NOT offline:
 # --validate fetches the `p/semgrep-rule-lints` metacheck ruleset from
-# semgrep.dev. Measured in harmony-arc-runner v0.3.8 under `docker run --network
+# semgrep.dev. Measured in a self-hosted runner image under `docker run --network
 # none`: it retried for 98 s, died on "Failed to resolve 'semgrep.dev'", printed
 # no count, and the old probe then failed OPEN. On exactly the egress-free runner
 # this gate is built for, the check skipped itself, slowly, and said so only in
@@ -28,7 +28,7 @@
 # equalled the real scan's:
 #
 #   config                                   probe    rules   real scan
-#   baked harmony-baseline.yaml              exit 0   8       runs 8 rules
+#   the baked default ruleset                exit 0   8       runs 8 rules
 #   directory, 3 rules across 2 files        exit 0   3       runs 3 rules
 #   directory whose rules are in .hidden     exit 0   3       runs 3 rules
 #   `rules: []`                              exit 0   0       exit 0  <- the silent pass

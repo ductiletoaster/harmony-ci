@@ -3,7 +3,8 @@ name: hadolint (dockerfile lint)
 description: >
   Dockerfile lint via the baked hadolint, reading the caller's .hadolint.yaml
   (curated ignore list) from cwd. Skips cleanly when the caller has no
-  Dockerfiles. BLOCKING. Requires a harmony-arc-runner (hadolint on PATH).
+  Dockerfiles. BLOCKING. Requires hadolint on PATH (baked into a self-hosted
+  runner image, or installed first).
 runs:
   using: composite
   steps:

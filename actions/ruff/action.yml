@@ -4,7 +4,8 @@ description: >
   Python lint + format check via the baked ruff, reading the CALLER repo's
   [tool.ruff] config. Auto-detected: skips cleanly (not silent-green) when the
   repo has no pyproject.toml / requirements*.txt, so it's safe in a non-Python
-  job. BLOCKING. Requires a harmony-arc-runner (ruff on PATH).
+  job. BLOCKING. Requires ruff on PATH (baked into a self-hosted runner image,
+  or installed first).
 runs:
   using: composite
   steps:

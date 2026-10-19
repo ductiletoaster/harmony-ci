@@ -8,13 +8,13 @@
 #
 # Tag-only, no push to main, so it stays branch-protection-friendly.
 #
-# NOTE (learned from pixeloven/lattice's release.yml): a tag pushed with
-# GITHUB_TOKEN does NOT fire another workflow's `on: push`. Lattice works around
-# that by explicitly dispatching its image build for the new tag. harmony-ci
+# NOTE (learned from one consumer's release.yml): a tag pushed with
+# GITHUB_TOKEN does NOT fire another workflow's `on: push`. That consumer works
+# around it by explicitly dispatching its image build for the new tag. harmony-ci
 # needs no such dispatch — there is nothing to build on a tag, and the GitHub
 # Release below is created in THIS job via the API rather than by a tag-triggered
 # workflow. If a tag-triggered workflow is ever added here it will NOT run on its
-# own, and must be dispatched explicitly the way lattice does.
+# own, and must be dispatched explicitly the way that consumer's is.
 name: Release (tag on version change)
 
 on:

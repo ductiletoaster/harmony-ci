@@ -11,8 +11,8 @@ description: >
   chooses WHICH commits are scanned: `history` (the default, and what every
   earlier version did) walks every ref the clone holds; `branch` walks only
   what HEAD reaches. Both the scope that ran AND the number of commits it
-  covered go to the job summary on EVERY run. Requires a harmony-arc-runner
-  (gitleaks on PATH).
+  covered go to the job summary on EVERY run. Requires gitleaks on PATH
+  (baked into a self-hosted runner image, or installed first).
 inputs:
   scope:
     description: >

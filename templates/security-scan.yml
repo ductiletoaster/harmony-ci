@@ -64,7 +64,7 @@ jobs:
           # pinned, but the action only wraps a binary it DOWNLOADS at run time,
           # and unset, GITLEAKS_VERSION means LATEST — so this job re-tools
           # itself on every run while looking pinned, and an upstream rule
-          # change arrives as an unexplained red sweep. Harmony ran two weeks
+          # change arrives as an unexplained red sweep. One consumer ran two weeks
           # red on exactly that, over a fake-token test fixture a newer ruleset
           # had started flagging. Bump this deliberately. If you also run the
           # blocking `actions/gitleaks` gate, keep the two versions in step or

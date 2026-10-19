@@ -4,7 +4,7 @@ Public **CI action library** — a set of **composite actions**, one per gate, t
 you compose into **your own** workflow. It runs on `ubuntu-latest` like anything
 else; a self-hosted runner pool is an optimization here, not a requirement.
 
-Two audiences, deliberately: the private Harmony fleet this was built for and is
+Two audiences, deliberately: the private fleet this was built for and is
 dogfooded by, and any public repo that wants the same gates without a cluster
 behind it. Where those diverge — a tool that has to be baked, a ruleset that is
 private — each action's **Runner needs** column says so, rather than the README
@@ -51,8 +51,8 @@ guidance is a recommended starting point, not a mandate.
 - **Not here:** the gate **tools** themselves. An action runs what is already on
   the runner's PATH, so where that comes from is yours to choose: public
   marketplace actions and one-line installs on `ubuntu-latest`, or an image you
-  bake. Harmony bakes them into the private `harmony-arc-runner`, which is that
-  fleet's trust root — not a dependency of this library.
+  bake. The fleet this was built for bakes them into a private runner image,
+  which is that fleet's trust root — not a dependency of this library.
 
 ## Actions
 
@@ -243,7 +243,7 @@ name outright rather than passing it through:
 
 | Input | Default | What it does |
 |---|---|---|
-| `config` | `/opt/semgrep/harmony-baseline.yaml` | The tokenless ruleset baked into `harmony-arc-runner`. Behaviour on that image is unchanged. |
+| `config` | `/opt/semgrep/harmony-baseline.yaml` | Where a self-hosted runner image may bake a tokenless ruleset. Behaviour on such an image is unchanged. |
 | | a path in your repo | e.g. `.semgrep/rules.yml`. A file or a directory; it must be readable **and load at least one rule**. This is what makes the gate usable with no baked image. |
 | | `auto`, `p/…`, `r/…` | **Refused**, with the reason above. Use `semgrep ci` directly if you want registry rules and have a token. |
 
@@ -361,7 +361,7 @@ tests — can't run as baked scanners, so these run **your own pinned tools** vi
 design: adopt each independently — drop the type-check, or swap its checker,
 without touching lint or test. Auto-detected (skip cleanly with no
 `pyproject.toml`). Require **uv on PATH** — on `ubuntu-latest` run
-`astral-sh/setup-uv` first; a baked image may already have it (Harmony's does).
+`astral-sh/setup-uv` first; a baked image may already have it.
 They run the tools from your
 **default** dependency group (`[dependency-groups] dev`), which `uv run` installs
 via its implicit sync; a repo that isolates them in a non-default group must
@@ -391,8 +391,8 @@ so a binary alone is not enough — it also needs a vulnerability database on di
 at `db-dir` (default `/opt/osv-scanner-db`), which in practice means a baked
 image.
 
-On a self-hosted image that bakes the tools — Harmony uses `harmony-arc-runner`
-— the scanner gates are satisfied with no egress and no tokens. Two caveats,
+On a self-hosted image that bakes the tools, the scanner gates are satisfied
+with no egress and no tokens. Two caveats,
 because "every gate" would be too strong. The language packs still resolve
 **your** dependencies, so they reach your package index like any `uv sync`. And
 `skill-layout` bakes nothing: it installs the Claude Code and Codex CLIs from

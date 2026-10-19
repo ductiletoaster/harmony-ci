@@ -1,7 +1,8 @@
 ---
 # This public repo's OWN CI — it's a supply-chain root, so it lints itself.
 # Runs on GitHub-hosted runners (no baked tools needed to lint YAML/workflows),
-# unlike the gate library it ships, which runs on consumers' ARC runners.
+# unlike the gate library it ships, which may run on a consumer's self-hosted
+# runners.
 name: CI
 
 on:
@@ -142,8 +143,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install semgrep
-        # Pinned to the version baked into harmony-arc-runner v0.3.8, which is
-        # the version rule_count.sh's measurements were taken against.
+        # Pinned to the version rule_count.sh's measurements were taken against
+        # (the one baked into the self-hosted runner image they ran in).
         run: pipx install semgrep==1.171.0
       - name: rule_count selftest, with no network
         run: |

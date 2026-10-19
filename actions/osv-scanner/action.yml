@@ -8,8 +8,9 @@ description: >
   ASSERTS COVERAGE: a scan that examined zero packages fails loudly instead of
   reporting a clean bill of health. By default it also scans lockfiles excluded
   by .gitignore, because osv-scanner's directory walk honours .gitignore and a
-  gitignored lockfile otherwise silently zeroes the gate. Seeded ecosystems:
-  PyPI/npm/Go/Cargo — an unseeded ecosystem needs a Dockerfile seed-tree entry.
+  gitignored lockfile otherwise silently zeroes the gate. Only ecosystems
+  seeded into the offline database are covered — an unseeded ecosystem needs
+  a seed entry in the image that bakes it.
 
   It ALSO asserts FRESHNESS. An offline database cannot see an advisory
   published after the image was built, and a scan against it still exits 0 — so
@@ -20,8 +21,8 @@ description: >
 
   Requires osv-scanner on PATH and an OFFLINE database directory (`db-dir`,
   default /opt/osv-scanner-db). The scan is --offline by design, so a binary
-  alone is not enough — in practice this means a baked image such as
-  harmony-arc-runner.
+  alone is not enough — in practice this means a self-hosted runner image
+  that bakes both.
 inputs:
   paths:
     description: >
@@ -59,7 +60,7 @@ inputs:
     description: >
       Directory holding the OFFLINE vulnerability database this gate scans
       against — and the directory whose vintage `max-db-age` measures. Default
-      `/opt/osv-scanner-db`, where harmony-arc-runner bakes it.
+      `/opt/osv-scanner-db`, where a baked runner image is expected to put it.
       It is an input because `max-db-age` and `allow-stale-db` already were: an
       image that bakes the database somewhere else would otherwise read as "age
       unknown", which this gate now FAILS on, with no way to say where to look.

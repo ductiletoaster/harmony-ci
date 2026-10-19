@@ -5,11 +5,12 @@ description: >
   reading the caller's config. A type-checker needs the resolved dependency graph,
   so it MUST run in the consumer's uv env — this is exactly why it can't live in
   the baked, env-independent gate library. The default checker is mypy (the fleet
-  standard, matching lattice + fire-risk-core); override `type-checker` to opt out
-  (e.g. basedpyright, pyrefly) — or just don't use this action if you type-check a
-  different way. Auto-detected: skips cleanly when the repo has no pyproject.toml.
-  Requires uv on PATH: baked into harmony-arc-runner; on github-hosted, run
-  astral-sh/setup-uv first.
+  standard, matching what existing consumers run); override `type-checker` to
+  opt out (e.g. basedpyright, pyrefly) — or just don't use this action if you
+  type-check a different way. Auto-detected: skips cleanly when the repo has no
+  pyproject.toml.
+  Requires uv on PATH (baked into a self-hosted runner image, or installed
+  first: on github-hosted, run astral-sh/setup-uv before this).
 inputs:
   type-checker:
     description: >

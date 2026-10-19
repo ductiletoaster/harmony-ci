@@ -262,8 +262,8 @@ GitHub already gives the job, and it is the configuration anyone can reproduce.
 For most projects this is the end of the decision.
 
 A self-hosted pool (`ci-arc.yml`) buys you something real when you have one:
-Harmony's `harmony-arc-runner` image bakes the gate tools, the semgrep ruleset
-and an offline OSV DB, so the floor makes **no network calls** and needs no
+an image that bakes the gate tools, a semgrep ruleset
+and an offline OSV DB means the floor makes **no network calls** and needs no
 registry login. That is worth having on a blocking gate, where flaky egress is
 an outage. It is an optimization on top of the baseline, not a prerequisite for
 using this library.
@@ -308,8 +308,8 @@ the threshold or set `allow-stale-db` — deliberately, and in a file someone ca
 review — rather than letting the gate keep reporting a clean bill of health it
 cannot support.
 
-**The semgrep-on-github-hosted caveat.** On ARC, semgrep uses the baked,
-tokenless `harmony-baseline.yaml` ruleset. That ruleset is **private** (baked
+**The semgrep-on-github-hosted caveat.** On ARC, semgrep uses a baked,
+tokenless ruleset at the `config` default path. That ruleset is **private** (baked
 into the runner image), and Semgrep's registry rulesets (`p/*`, `auto`) are
 **login-gated** — tokenless they return zero findings. So on github-hosted,
 semgrep needs **either**:
@@ -352,9 +352,10 @@ If you do wire up scheduling, note that `security-scan.yml` is **not** a good
 required check — it's the non-blocking depth tier and never runs on a PR.
 
 > Aside — why the aggregator runs on `ubuntu-latest`: `re-actors/alls-green`
-> exit-127s on the arc runner image (it needs no baked tooling), so the templates
-> keep that one job on GitHub-hosted even in the arc template. This mirrors how
-> Harmony and Lattice already wire it — a convenience worth copying.
+> can exit 127 on a minimal self-hosted runner image (and it needs no baked
+> tooling), so the templates keep that one job on GitHub-hosted even in the arc
+> template. Existing consumers already wire it this way — a convenience worth
+> copying.
 
 ---
 
